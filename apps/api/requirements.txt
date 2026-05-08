@@ -1,0 +1,16 @@
+# RIFTSCOPE API - Core dependencies
+# Compatible with Python 3.12, 3.13 and 3.14 (uses ranges so pip picks the
+# newest version that has a precompiled wheel for the active interpreter).
+#
+# For production additions (PostgreSQL, Redis, Celery, demoparser2, pandas)
+# see requirements-prod.txt.
+
+fastapi>=0.118.0,<1.0
+uvicorn[standard]>=0.34.0,<1.0
+sqlalchemy>=2.0.36,<3.0
+alembic>=1.14.0,<2.0
+pydantic>=2.11.0,<3.0
+pydantic-settings>=2.7.0,<3.0
+python-multipart>=0.0.20,<1.0
+aiofiles>=24.1.0,<25.0
+httpx>=0.28.1,<1.0

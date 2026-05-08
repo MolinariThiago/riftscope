@@ -1,0 +1,29 @@
+# RIFTSCOPE API - Production dependencies
+# Install on top of requirements.txt only when deploying to production
+# (PostgreSQL + Redis + Celery + demoparser2 + S3/MinIO + pandas)
+#
+# These packages are NOT installed in dev because they may break on Windows
+# and require platform-specific Rust/C toolchains (especially demoparser2).
+#
+# Install with:  py -m pip install -r requirements-prod.txt
+
+# PostgreSQL drivers
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+
+# Async task queue
+celery==5.4.0
+redis==5.2.1
+
+# Object storage (S3 / MinIO)
+boto3==1.35.92
+
+# CS2 demo parsing (Rust-backed)
+demoparser2==0.30.0
+
+# Data analysis
+pandas==2.2.3
+
+# Auth (production)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4

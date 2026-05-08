@@ -1,0 +1,247 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* RIFTSCOPE Dark Theme – Primary */
+    --background: 220 18% 6%;
+    --foreground: 210 20% 92%;
+
+    --surface: 220 16% 9%;
+    --surface-elevated: 220 14% 12%;
+    --surface-overlay: 220 12% 16%;
+
+    --border: 220 14% 18%;
+    --border-subtle: 220 14% 13%;
+
+    /* Electric cyan-teal accent */
+    --primary: 185 100% 52%;
+    --primary-foreground: 220 18% 6%;
+    --primary-dim: 185 60% 18%;
+
+    --accent: 270 80% 65%;
+    --accent-foreground: 0 0% 100%;
+
+    --muted: 220 14% 14%;
+    --muted-foreground: 215 15% 50%;
+
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* CS2 team colors (HSL form, used by inline styles in PlayerTable etc.) */
+    --ct: 213 100% 65%;
+    --ct-dim: 213 60% 27%;
+    --tt: 33 100% 64%;
+    --tt-dim: 33 60% 26%;
+
+    --radius: 8px;
+
+    --grid-pattern: url("data:image/svg+xml,%3Csvg width='40' height='40' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 40L40 0M-5 5L5 -5M35 45L45 35' stroke='%23ffffff08' stroke-width='1'/%3E%3C/svg%3E");
+
+    --font-display: 'Syne', sans-serif;
+    --font-body: 'DM Sans', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+  }
+
+  code, pre, .mono {
+    font-family: var(--font-mono);
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--surface));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+
+  /* Selection */
+  ::selection {
+    background: hsl(var(--primary) / 0.25);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer components {
+  /* Glassmorphism card */
+  .glass-card {
+    background: hsl(var(--surface) / 0.8);
+    backdrop-filter: blur(12px);
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+  }
+
+  /* Glow effects */
+  .glow-primary {
+    box-shadow: 0 0 30px hsl(var(--primary) / 0.2), 0 0 60px hsl(var(--primary) / 0.08);
+  }
+  .glow-text-primary {
+    text-shadow: 0 0 20px hsl(var(--primary) / 0.5);
+  }
+
+  /* Primary gradient text */
+  .gradient-text {
+    background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(185 100% 70%) 50%, hsl(var(--accent)) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Stat value display */
+  .stat-value {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+
+  /* Noise texture overlay */
+  .noise-overlay {
+    position: relative;
+  }
+  .noise-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    opacity: 0.04;
+    pointer-events: none;
+    border-radius: inherit;
+  }
+
+  /* Animated border */
+  .border-glow {
+    position: relative;
+  }
+  .border-glow::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.5), transparent 50%, hsl(var(--accent) / 0.3));
+    border-radius: calc(var(--radius) + 1px);
+    z-index: -1;
+  }
+
+  /* Table styles */
+  .rs-table th {
+    @apply text-xs font-medium tracking-wider uppercase;
+    color: hsl(var(--muted-foreground));
+    padding: 10px 16px;
+    border-bottom: 1px solid hsl(var(--border));
+    font-family: var(--font-mono);
+  }
+  .rs-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid hsl(var(--border-subtle));
+    font-size: 14px;
+  }
+  .rs-table tr:hover td {
+    background: hsl(var(--surface-elevated));
+  }
+
+  /* Badge base */
+  .rs-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+  }
+
+  /* Processing states */
+  .shimmer-loading {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--surface)) 0%,
+      hsl(var(--surface-elevated)) 50%,
+      hsl(var(--surface)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+  }
+}
+
+@layer utilities {
+  .text-balance { text-wrap: balance; }
+  .font-display { font-family: var(--font-display); }
+  .font-mono-rs { font-family: var(--font-mono); }
+
+  /* Replay scrubber: invisible track (we render our own progress bar
+     underneath), visible thumb. */
+  .rs-scrubber {
+    background: transparent;
+    outline: none;
+  }
+  .rs-scrubber::-webkit-slider-runnable-track {
+    background: transparent;
+    height: 6px;
+    border-radius: 3px;
+  }
+  .rs-scrubber::-moz-range-track {
+    background: transparent;
+    height: 6px;
+    border-radius: 3px;
+  }
+  .rs-scrubber::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    background: hsl(var(--primary));
+    border: 2px solid hsl(var(--background));
+    cursor: pointer;
+    margin-top: -4px;
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3);
+  }
+  .rs-scrubber::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    background: hsl(var(--primary));
+    border: 2px solid hsl(var(--background));
+    cursor: pointer;
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3);
+  }
+}

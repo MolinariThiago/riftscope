@@ -1,0 +1,111 @@
+# RIFTSCOPE — docker-compose
+#
+# PROFILES:
+#   dev  -> just web + api (api uses SQLite, no postgres/redis/minio needed)
+#          docker compose --profile dev up
+#   prod -> full stack: web + api + worker + postgres + redis + minio
+#          docker compose --profile prod up
+#
+# When running `prod`, the api image must be built with EXTRA_REQS=prod so the
+# extra dependencies (asyncpg, celery, redis, demoparser2…) get installed.
+# See docker/Dockerfile.api.
+
+services:
+  # -------------------------------------------------------------------
+  # Frontend
+  # -------------------------------------------------------------------
+  web:
+    profiles: ["dev", "prod"]
+    build:
+      context: ../apps/web
+      dockerfile: ../../docker/Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
+
+  # -------------------------------------------------------------------
+  # Backend API (slim by default, prod profile pulls extra deps)
+  # -------------------------------------------------------------------
+  api:
+    profiles: ["dev", "prod"]
+    build:
+      context: ../apps/api
+      dockerfile: ../../docker/Dockerfile.api
+      args:
+        EXTRA_REQS: ${EXTRA_REQS:-slim}
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////data/riftscope.db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CORS_ORIGINS=["http://localhost:3000"]
+    volumes:
+      - api_data:/data
+      - api_uploads:/app/storage/uploads
+
+  # -------------------------------------------------------------------
+  # Celery worker — only enabled in `prod` profile
+  # -------------------------------------------------------------------
+  worker:
+    profiles: ["prod"]
+    build:
+      context: ../apps/api
+      dockerfile: ../../docker/Dockerfile.api
+      args:
+        EXTRA_REQS: prod
+    command: celery -A workers.demo_worker worker --loglevel=info -Q demo_processing
+    environment:
+      - DATABASE_URL=postgresql://riftscope:riftscope@db:5432/riftscope
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - api_uploads:/app/storage/uploads
+
+  # -------------------------------------------------------------------
+  # Production-only services
+  # -------------------------------------------------------------------
+  db:
+    profiles: ["prod"]
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=riftscope
+      - POSTGRES_USER=riftscope
+      - POSTGRES_PASSWORD=riftscope
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    profiles: ["prod"]
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  minio:
+    profiles: ["prod"]
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=riftscope
+      - MINIO_ROOT_PASSWORD=riftscope123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+volumes:
+  api_data:
+  api_uploads:
+  postgres_data:
+  redis_data:
+  minio_data:
