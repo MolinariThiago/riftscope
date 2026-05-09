@@ -14,3 +14,8 @@ pydantic-settings>=2.7.0,<3.0
 python-multipart>=0.0.20,<1.0
 aiofiles>=24.1.0,<25.0
 httpx>=0.28.1,<1.0
+
+# CS2 demo parser — Rust-backed, ships precompiled wheels for Win/Linux/macOS.
+# When a wheel is unavailable for the runtime Python, the factory falls back
+# to the stub parser so the dev pipeline still runs end-to-end.
+demoparser2>=0.41.0,<1.0

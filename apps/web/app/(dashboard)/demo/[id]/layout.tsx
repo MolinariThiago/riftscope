@@ -37,6 +37,17 @@ export default function DemoDetailLayout({ children }: { children: React.ReactNo
     liveStatus === "queued" || liveStatus === "processing" || liveStatus === "uploaded";
   const failed = liveStatus === "failed";
 
+  // Replay viewer is full-bleed: drop the parent's p-6 padding and the
+  // standard demo header/tabs so the map can act as the page background.
+  const isReplay = pathname?.endsWith("/replay") ?? false;
+  if (isReplay) {
+    return (
+      <div className="-m-6 h-[calc(100vh-4rem)] overflow-hidden">
+        {children}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">

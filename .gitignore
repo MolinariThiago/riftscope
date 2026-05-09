@@ -46,6 +46,9 @@ apps/api/storage/uploads/*.dem.gz
 *.swo
 .DS_Store
 
+# Claude Code local config
+.claude/
+
 # Logs
 *.log
 npm-debug.log*

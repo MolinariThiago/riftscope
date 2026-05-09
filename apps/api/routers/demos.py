@@ -1,5 +1,10 @@
 """
 /demos endpoints — full CRUD + status polling + analysis + per-round 2D timeline.
+
+Phase 3A wires the storage and queue backends through their factory functions
+in :mod:`services.storage` and :mod:`services.queue`, so flipping the
+``STORAGE_BACKEND`` / ``QUEUE_BACKEND`` env vars swaps implementations at
+startup without touching this module.
 """
 
 from datetime import datetime
@@ -19,11 +24,11 @@ from schemas.demo import (
     TimelineMeta,
     TimelineRoundMeta,
 )
-from services.storage import LocalDemoStorage
+from services.queue import get_queue
+from services.storage import get_storage
 from workers.demo_worker import process_demo
 
 router = APIRouter()
-storage = LocalDemoStorage()
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +56,7 @@ async def upload_demo(
     if extension != ".dem":
         raise HTTPException(status_code=400, detail="Only .dem files are supported")
 
+    storage = get_storage()
     _, storage_filename, abs_path = storage.save_demo(file)
 
     demo = Demo(
@@ -63,7 +69,8 @@ async def upload_demo(
     db.commit()
     db.refresh(demo)
 
-    background_tasks.add_task(_kickoff_processing, demo.id, abs_path)
+    queue = get_queue()
+    queue.enqueue(background_tasks, process_demo, demo.id, abs_path)
 
     return DemoUploadResponse(
         id=str(demo.id),
@@ -174,14 +181,8 @@ async def delete_demo(demo_id: int, db: Session = Depends(get_db)):
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
+    storage = get_storage()
     storage.delete_demo(demo.storage_filename)
     db.delete(demo)
     db.commit()
     return None
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-async def _kickoff_processing(demo_id: int, file_path: str) -> None:
-    await process_demo(demo_id, file_path)

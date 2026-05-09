@@ -1,19 +1,37 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { Loader2, AlertCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  Box,
+  Grid3x3,
+  Loader2,
+  Lock,
+  MinusCircle,
+  PlusCircle,
+  RotateCcw,
+} from "lucide-react";
 
+import { ExchangesPanel } from "@/components/replay/ExchangesPanel";
 import { KillFeed } from "@/components/replay/KillFeed";
-import { MapCanvas } from "@/components/replay/MapCanvas";
-import { PlaybackControlsBar } from "@/components/replay/PlaybackControls";
-import { RoundSelector } from "@/components/replay/RoundSelector";
+import { LayersPanel } from "@/components/replay/LayersPanel";
+import {
+  DEFAULT_LAYERS,
+  MapCanvas,
+  type ReplayLayers,
+} from "@/components/replay/MapCanvas";
+import { ReplayTimelineBar } from "@/components/replay/ReplayTimelineBar";
+import { TeamLoadoutPanel } from "@/components/replay/TeamLoadoutPanel";
 import {
   useDemo,
   useDemoAnalysis,
   useRoundTimeline,
 } from "@/lib/hooks/useDemos";
+import { useMapMeta } from "@/lib/hooks/useMaps";
 import { useRoundPlayback } from "@/lib/hooks/useRoundPlayback";
+import { cn } from "@/lib/utils";
 import type { PlayerStats } from "@/types/demo";
 
 export default function ReplayPage() {
@@ -29,8 +47,9 @@ export default function ReplayPage() {
 
   const [currentRound, setCurrentRound] = useState<number | null>(null);
   const [hoveredPlayer, setHoveredPlayer] = useState<string | null>(null);
+  const [layers, setLayers] = useState<ReplayLayers>(DEFAULT_LAYERS);
+  const [showLayers, setShowLayers] = useState(false);
 
-  // Default to round 1 once analysis arrives
   useEffect(() => {
     if (analysis && currentRound === null && analysis.rounds.length > 0) {
       setCurrentRound(analysis.rounds[0].number);
@@ -43,6 +62,8 @@ export default function ReplayPage() {
     ready,
   );
 
+  const { data: mapMeta } = useMapMeta(analysis?.demo.map ?? null);
+
   const [state, controls] = useRoundPlayback(timeline);
 
   const playerLookup = useMemo(() => {
@@ -51,163 +72,223 @@ export default function ReplayPage() {
     return map;
   }, [analysis?.players]);
 
-  // ================== UI states ==================
+  const round = analysis?.rounds.find((r) => r.number === currentRound);
+  const duration = timeline?.durationSeconds ?? 0;
+  const remaining = Math.max(0, duration - state.time);
+
+  // ============== Loading / processing states ==============
   if (!ready) {
     return (
-      <div className="glass-card rounded-xl p-10 flex items-center gap-3 justify-center">
-        <Loader2 className="animate-spin text-primary" size={18} />
-        <span className="text-sm text-muted-foreground">
-          Waiting for demo to finish processing…
-        </span>
+      <div className="h-full w-full flex items-center justify-center bg-background">
+        <div className="flex items-center gap-3 px-6 py-3 rounded-lg bg-surface-elevated/60 border border-border">
+          <Loader2 className="animate-spin text-primary" size={18} />
+          <span className="text-sm text-muted-foreground">
+            Waiting for demo to finish processing…
+          </span>
+        </div>
       </div>
     );
   }
 
   if (analysisLoading || !analysis) {
     return (
-      <div className="space-y-4">
-        <div className="h-20 shimmer-loading rounded-xl" />
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
-          <div className="aspect-square shimmer-loading rounded-xl" />
-          <div className="h-[600px] shimmer-loading rounded-xl" />
-        </div>
+      <div className="h-full w-full p-4 flex flex-col gap-3 bg-background">
+        <div className="h-12 shimmer-loading rounded-lg" />
+        <div className="flex-1 shimmer-loading rounded-xl" />
+        <div className="h-32 shimmer-loading rounded-lg" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <RoundSelector
-        rounds={analysis.rounds}
-        current={currentRound ?? 1}
-        onSelect={(n) => setCurrentRound(n)}
-      />
+    <div className="h-full w-full flex flex-col bg-background overflow-hidden">
+      {/* ================= TOP BAR (minimal) ================= */}
+      <header className="relative h-10 flex items-center px-3 border-b border-border/40 bg-surface/40 backdrop-blur-sm z-20">
+        <Link
+          href={`/demo/${demoId}/overview`}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft size={13} />
+          Back
+        </Link>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
-        <div className="space-y-3">
-          <div className="relative">
-            {timelineLoading && (
-              <div className="absolute inset-0 z-10 rounded-xl bg-background/70 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="animate-spin" size={14} />
-                  Loading round {currentRound}…
-                </div>
-              </div>
+        <span className="ml-3 text-[10px] font-mono-rs uppercase tracking-widest text-muted-foreground">
+          {mapMeta?.displayName ?? analysis.demo.map ?? "—"}
+        </span>
+
+        {round && (
+          <span
+            className={cn(
+              "rs-badge ml-auto",
+              round.winner === "ct" ? "bg-ct/15 text-ct" : "bg-tt/15 text-tt",
             )}
-            <MapCanvas
-              mapName={analysis.demo.map}
-              frame={state.currentFrame}
-              pastEvents={state.pastEvents}
-              currentTime={state.time}
-              focusedSteamId={hoveredPlayer}
+          >
+            R{round.number} · {round.winner.toUpperCase()} · {round.endReason}
+          </span>
+        )}
+      </header>
+
+      {/* ================= MAIN AREA ================= */}
+      <main className="relative flex-1 overflow-hidden">
+        {/* MAP — fills the entire main area as background */}
+        <div className="absolute inset-0">
+          {timelineLoading && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/70 backdrop-blur-sm pointer-events-none">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="animate-spin text-primary" size={14} />
+                Loading round {currentRound}…
+              </div>
+            </div>
+          )}
+          <MapCanvas
+            mapName={analysis.demo.map}
+            mapMeta={mapMeta}
+            frame={state.currentFrame}
+            pastEvents={state.pastEvents}
+            currentTime={state.time}
+            allFrames={timeline?.frames}
+            focusedSteamId={hoveredPlayer}
+            playerLookup={playerLookup}
+            layers={layers}
+            fullBleed
+          />
+        </div>
+
+        {/* TOP CENTER — Big round timer, cs2.cam-style */}
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none">
+          <div className="rounded-md bg-background/85 backdrop-blur-md border border-border/50 px-4 py-1.5 shadow-lg flex items-center gap-3">
+            <span className="font-display font-bold text-lg tabular-nums tracking-tight">
+              {formatTime(remaining)}
+            </span>
+          </div>
+        </div>
+
+        {/* LEFT EDGE — Map tools strip (lock / zoom / refresh / grid / 3D) */}
+        <aside className="absolute top-3 left-3 flex flex-col items-stretch rounded-lg overflow-hidden bg-background/85 backdrop-blur-md border border-border/50 shadow-lg pointer-events-auto">
+          <ToolStripBtn
+            icon={Lock}
+            title="Lock view (coming soon)"
+            disabled
+          />
+          <ToolStripBtn
+            icon={PlusCircle}
+            title="Zoom in"
+            onClick={() => {/* MapCanvas handles wheel zoom — kept as visual cue */}}
+            disabled
+          />
+          <ToolStripBtn
+            icon={MinusCircle}
+            title="Zoom out"
+            disabled
+          />
+          <ToolStripBtn
+            icon={RotateCcw}
+            title="Reset view"
+            disabled
+          />
+          <ToolStripBtn
+            icon={Grid3x3}
+            title="Toggle grid"
+            active={layers.grid}
+            onClick={() => setLayers((l) => ({ ...l, grid: !l.grid }))}
+          />
+          <ToolStripBtn
+            icon={Box}
+            title="3D view (coming soon)"
+            disabled
+          />
+        </aside>
+
+        {/* RIGHT TOP — Exchanges + Killfeed (compact, stacked) */}
+        <aside className="absolute top-3 right-3 w-[280px] flex flex-col gap-2 pointer-events-none">
+          <div className="pointer-events-auto">
+            <ExchangesPanel
+              events={state.pastEvents}
               playerLookup={playerLookup}
             />
           </div>
+          <div className="pointer-events-auto">
+            <KillFeed
+              events={state.pastEvents}
+              playerLookup={playerLookup}
+              onHover={setHoveredPlayer}
+            />
+          </div>
+        </aside>
 
-          <PlaybackControlsBar
-            state={state}
-            controls={controls}
-            duration={timeline?.durationSeconds ?? 0}
-            events={timeline?.events ?? []}
-          />
-        </div>
+        {/* RIGHT BOTTOM — Team loadouts (CT + T stacked) */}
+        <aside className="absolute bottom-3 right-3 w-[280px] flex flex-col gap-2 pointer-events-none">
+          <div className="pointer-events-auto">
+            <TeamLoadoutPanel
+              frame={state.currentFrame}
+              loadouts={timeline?.loadouts}
+              playerLookup={playerLookup}
+              focusedSteamId={hoveredPlayer}
+              onHover={setHoveredPlayer}
+            />
+          </div>
+        </aside>
 
-        <div className="space-y-3">
-          <RoundInfo
-            roundNumber={currentRound ?? 1}
-            analysis={analysis}
-          />
-          <KillFeed
-            events={state.pastEvents}
-            playerLookup={playerLookup}
-            onHover={setHoveredPlayer}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RoundInfo({
-  roundNumber,
-  analysis,
-}: {
-  roundNumber: number;
-  analysis: NonNullable<ReturnType<typeof useDemoAnalysis>["data"]>;
-}) {
-  const round = analysis.rounds.find((r) => r.number === roundNumber);
-  const economy = analysis.economy.find((e) => e.round === roundNumber);
-
-  if (!round) return null;
-
-  return (
-    <div className="glass-card rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-mono-rs uppercase tracking-wider text-muted-foreground">
-          Round info
-        </h3>
-        <span
-          className="rs-badge"
-          style={{
-            background:
-              round.winner === "ct"
-                ? "hsl(213 100% 65% / 0.15)"
-                : "hsl(33 100% 64% / 0.15)",
-            color:
-              round.winner === "ct"
-                ? "hsl(213 100% 65%)"
-                : "hsl(33 100% 64%)",
-          }}
-        >
-          {round.winner.toUpperCase()} · {round.endReason}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        <Stat label="Duration" value={`${round.durationSeconds}s`} />
-        <Stat label="Half" value={`${round.half}`} />
-        {round.bombPlanted && (
-          <Stat label="Bomb site" value={round.bombSite ?? "—"} />
+        {/* LEFT BOTTOM — Layers panel (toggle from bottom bar gear) */}
+        {showLayers && (
+          <aside className="absolute bottom-3 left-16 w-[260px] z-10 animate-fade-in pointer-events-auto">
+            <LayersPanel layers={layers} onChange={setLayers} />
+          </aside>
         )}
-        <Stat
-          label="CT eq"
-          value={`$${round.ctEquipmentValue.toLocaleString()}`}
-        />
-        <Stat
-          label="T eq"
-          value={`$${round.ttEquipmentValue.toLocaleString()}`}
-        />
-      </div>
+      </main>
 
-      {economy && (
-        <div className="pt-2 border-t border-border/50 grid grid-cols-2 gap-2 text-xs">
-          <Stat
-            label="CT type"
-            value={<span className="capitalize">{economy.ctType}</span>}
-          />
-          <Stat
-            label="T type"
-            value={<span className="capitalize">{economy.ttType}</span>}
-          />
-        </div>
-      )}
+      {/* ================= BOTTOM BAR (unified) ================= */}
+      <ReplayTimelineBar
+        rounds={analysis.rounds}
+        currentRound={currentRound ?? 1}
+        onRoundChange={setCurrentRound}
+        state={state}
+        controls={controls}
+        duration={duration}
+        events={timeline?.events ?? []}
+        playerLookup={playerLookup}
+        onHover={setHoveredPlayer}
+        onToggleLayers={() => setShowLayers((v) => !v)}
+      />
     </div>
   );
 }
 
-function Stat({
-  label,
-  value,
+function formatTime(s: number): string {
+  if (!isFinite(s) || s < 0) s = 0;
+  const mm = Math.floor(s / 60).toString().padStart(2, "0");
+  const ss = Math.floor(s % 60).toString().padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function ToolStripBtn({
+  icon: Icon,
+  title,
+  onClick,
+  disabled = false,
+  active = false,
 }: {
-  label: string;
-  value: React.ReactNode;
+  icon: React.ElementType;
+  title: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  active?: boolean;
 }) {
   return (
-    <div>
-      <div className="text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className="font-mono-rs text-sm text-foreground">{value}</div>
-    </div>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={cn(
+        "w-9 h-9 flex items-center justify-center transition-colors border-b border-border/30 last:border-b-0",
+        active
+          ? "bg-primary-dim text-primary"
+          : disabled
+            ? "text-muted-foreground/40 cursor-not-allowed"
+            : "text-muted-foreground hover:text-foreground hover:bg-surface-elevated",
+      )}
+    >
+      <Icon size={14} />
+    </button>
   );
 }

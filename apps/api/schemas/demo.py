@@ -1,7 +1,7 @@
 """
-Pydantic v2 schemas for demo-related API responses.
+Pydantic v2 schemas for demo / map API responses.
 
-These mirror `apps/web/types/demo.ts` so the contract stays in sync.
+These mirror ``apps/web/types/demo.ts`` so the contract stays in sync.
 """
 
 from __future__ import annotations
@@ -90,5 +90,49 @@ class RoundTimelineResponse(BaseModel):
     duration_seconds: float = Field(..., alias="durationSeconds")
     frames: list[dict[str, Any]]
     events: list[dict[str, Any]]
+    loadouts: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+# ---------------------------------------------------------------------------
+# Map metadata (Phase 3A)
+# ---------------------------------------------------------------------------
+
+
+class MapCalloutResponse(BaseModel):
+    name: str
+    x: float
+    y: float
+    radius: float
+
+
+class MapMetadataResponse(BaseModel):
+    name: str
+    display_name: str = Field(..., alias="displayName")
+
+    # Radar projection (Valve overview <map>.txt constants)
+    pos_x: float = Field(..., alias="posX")
+    pos_y: float = Field(..., alias="posY")
+    scale: float
+    radar_size: int = Field(..., alias="radarSize")
+
+    # Asset URLs
+    radar_url: str = Field(..., alias="radarUrl")
+    radar_url_lower: Optional[str] = Field(None, alias="radarUrlLower")
+    lower_threshold_z: Optional[float] = Field(None, alias="lowerThresholdZ")
+
+    # World bounds (derived)
+    world_min_x: float = Field(..., alias="worldMinX")
+    world_max_x: float = Field(..., alias="worldMaxX")
+    world_min_y: float = Field(..., alias="worldMinY")
+    world_max_y: float = Field(..., alias="worldMaxY")
+
+    # Anchors (world coords)
+    site_a: list[float] = Field(..., alias="siteA")
+    site_b: list[float] = Field(..., alias="siteB")
+    spawn_ct: list[float] = Field(..., alias="spawnCt")
+    spawn_tt: list[float] = Field(..., alias="spawnTt")
+    callouts: list[MapCalloutResponse]
 
     model_config = ConfigDict(populate_by_name=True)

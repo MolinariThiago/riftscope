@@ -5,6 +5,7 @@ import type {
   DemoStatusPayload,
   DemoSummary,
   DemoUploadResponse,
+  MapMetadata,
   PlayerSearchResponse,
   RoundTimeline,
 } from "@/types/demo";
@@ -72,6 +73,38 @@ export const api = {
     search: (query: string) =>
       request<PlayerSearchResponse>(
         `/players/search?query=${encodeURIComponent(query)}`,
+      ),
+  },
+
+  maps: {
+    list: () => request<MapMetadata[]>("/maps"),
+    get: (name: string) =>
+      request<MapMetadata>(`/maps/${encodeURIComponent(name)}`),
+  },
+
+  pro: {
+    matches: (limit = 50) =>
+      request<{
+        total: number;
+        matches: Array<{
+          id: number;
+          source: string;
+          sourceMatchId: string;
+          teamA: string;
+          teamB: string;
+          scoreA: number | null;
+          scoreB: number | null;
+          map: string | null;
+          event: string | null;
+          playedAt: string | null;
+          demoUrl: string | null;
+          demoId: number | null;
+        }>;
+      }>(`/pro/matches?limit=${limit}`),
+    sync: () =>
+      request<{ inserted: number; updated: number; errors: unknown[] }>(
+        "/pro/sync",
+        { method: "POST" },
       ),
   },
 };

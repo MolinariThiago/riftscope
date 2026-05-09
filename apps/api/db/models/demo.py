@@ -1,13 +1,37 @@
 """
-Demo SQLAlchemy model — full schema for RIFTSCOPE platform.
+Demo SQLAlchemy models — full schema for RIFTSCOPE platform.
 
 Status flow:
     uploaded -> queued -> processing -> completed
                                     `-> failed
+
+Phase 3A normalizes the heavy fields that used to live exclusively inside
+``Demo.analysis_data`` (a JSON blob) into proper relational tables:
+
+- :class:`DemoPlayer` — one row per player per demo, indexed by Steam ID so
+  ``/players/search`` aggregates without scanning JSON.
+- :class:`DemoRound` — one row per round.
+- :class:`DemoKill` — one row per kill, indexed by killer / victim Steam IDs.
+
+The JSON blob is still kept on ``Demo.analysis_data`` because the per-frame
+2D timeline lives there and is loaded on demand for the replay viewer. The
+normalized tables sit alongside it for fast aggregate queries.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Float, Text, JSON
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+)
+from sqlalchemy.orm import relationship
 
 from db.database import Base
 
@@ -28,15 +52,37 @@ class Demo(Base):
     error_message = Column(Text, nullable=True)
 
     # Match metadata (filled by parser)
-    map_name = Column(String, nullable=True)
+    map_name = Column(String, nullable=True, index=True)
     tick_rate = Column(Integer, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     round_count = Column(Integer, nullable=True)
     score_ct = Column(Integer, nullable=True)
     score_tt = Column(Integer, nullable=True)
 
-    # Heavy parser output (denormalized JSON for v1; will move to relational tables in Phase 3)
+    # Heavy parser output. Player/round/kill arrays are also normalized into
+    # DemoPlayer/DemoRound/DemoKill, but the per-round 2D timeline (frames +
+    # events) lives here because it's loaded on-demand for the replay viewer.
     analysis_data = Column(JSON, nullable=True)
+
+    # Relationships — cascade so deleting a demo wipes its rows.
+    players = relationship(
+        "DemoPlayer",
+        back_populates="demo",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    rounds = relationship(
+        "DemoRound",
+        back_populates="demo",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    kills = relationship(
+        "DemoKill",
+        back_populates="demo",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -53,3 +99,84 @@ class Demo(Base):
             "roundCount": self.round_count,
             "score": [self.score_ct, self.score_tt] if self.score_ct is not None else None,
         }
+
+
+class DemoPlayer(Base):
+    """One row per player per demo. Indexed by Steam ID for /players/search."""
+
+    __tablename__ = "demo_players"
+
+    id = Column(Integer, primary_key=True, index=True)
+    demo_id = Column(Integer, ForeignKey("demos.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    steam_id = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    team = Column(String, nullable=False)  # "ct" | "tt"
+
+    kills = Column(Integer, default=0, nullable=False)
+    deaths = Column(Integer, default=0, nullable=False)
+    assists = Column(Integer, default=0, nullable=False)
+    headshots = Column(Integer, default=0, nullable=False)
+    adr = Column(Float, default=0.0, nullable=False)
+    kast = Column(Integer, default=0, nullable=False)
+    hs_percent = Column(Integer, default=0, nullable=False)
+    rating = Column(Float, default=0.0, nullable=False, index=True)
+
+    opening_kills = Column(Integer, default=0, nullable=False)
+    opening_deaths = Column(Integer, default=0, nullable=False)
+    clutch_wins = Column(Integer, default=0, nullable=False)
+    clutch_attempts = Column(Integer, default=0, nullable=False)
+    utility_damage = Column(Integer, default=0, nullable=False)
+    flash_assists = Column(Integer, default=0, nullable=False)
+    mvp_rounds = Column(Integer, default=0, nullable=False)
+
+    demo = relationship("Demo", back_populates="players")
+
+
+class DemoRound(Base):
+    """One row per round. Used for fast per-demo round listings."""
+
+    __tablename__ = "demo_rounds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    demo_id = Column(Integer, ForeignKey("demos.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    number = Column(Integer, nullable=False)
+    half = Column(Integer, nullable=False)
+    winner = Column(String, nullable=False)        # "ct" | "tt"
+    end_reason = Column(String, nullable=False)
+    duration_seconds = Column(Integer, nullable=False)
+    start_tick = Column(Integer, nullable=False)
+    end_tick = Column(Integer, nullable=False)
+    ct_equipment_value = Column(Integer, default=0, nullable=False)
+    tt_equipment_value = Column(Integer, default=0, nullable=False)
+    bomb_planted = Column(Boolean, default=False, nullable=False)
+    bomb_site = Column(String, nullable=True)      # "A" | "B" | None
+
+    demo = relationship("Demo", back_populates="rounds")
+
+
+class DemoKill(Base):
+    """One row per kill. Indexed for cross-demo player aggregations."""
+
+    __tablename__ = "demo_kills"
+
+    id = Column(Integer, primary_key=True, index=True)
+    demo_id = Column(Integer, ForeignKey("demos.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    round_number = Column(Integer, nullable=False, index=True)
+    tick = Column(Integer, nullable=False)
+    killer_steam_id = Column(String, nullable=False, index=True)
+    victim_steam_id = Column(String, nullable=False, index=True)
+    weapon = Column(String, nullable=False)
+    headshot = Column(Boolean, default=False, nullable=False)
+    through_smoke = Column(Boolean, default=False, nullable=False)
+    blinded = Column(Boolean, default=False, nullable=False)
+    is_opening_kill = Column(Boolean, default=False, nullable=False)
+
+    killer_x = Column(Float, nullable=False)
+    killer_y = Column(Float, nullable=False)
+    victim_x = Column(Float, nullable=False)
+    victim_y = Column(Float, nullable=False)
+
+    demo = relationship("Demo", back_populates="kills")

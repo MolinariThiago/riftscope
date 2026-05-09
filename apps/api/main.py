@@ -3,7 +3,9 @@ RIFTSCOPE API — FastAPI entry point.
 
 Runs on Windows + Python 3.14 with the slim requirements.txt.
 For production (PostgreSQL + Redis + Celery + demoparser2), additionally
-install requirements-prod.txt and set DATABASE_URL / REDIS_URL accordingly.
+install requirements-prod.txt and set DATABASE_URL / REDIS_URL accordingly,
+then flip PARSER_BACKEND / STORAGE_BACKEND / QUEUE_BACKEND in the env so
+the factories pick up the production implementations.
 """
 
 import logging
@@ -15,8 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.settings import get_settings
 from db.database import Base, engine
 # Import all models BEFORE create_all so SQLAlchemy registers their tables.
-from db.models.demo import Demo  # noqa: F401
-from routers import demos, players
+from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound  # noqa: F401
+from db.models.pro_match import ProMatch  # noqa: F401
+from routers import demos, maps, players, pro
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,7 +34,14 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # Startup
     Base.metadata.create_all(bind=engine)
-    logger.info("RIFTSCOPE API ready (env=%s, db=%s)", settings.environment, settings.database_url)
+    logger.info(
+        "RIFTSCOPE API ready (env=%s, db=%s, parser=%s, storage=%s, queue=%s)",
+        settings.environment,
+        settings.database_url,
+        settings.parser_backend,
+        settings.storage_backend,
+        settings.queue_backend,
+    )
     yield
     # Shutdown — nothing to clean up yet
     logger.info("RIFTSCOPE API shutting down")
@@ -39,7 +49,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    description="CS2 Demo Analytics Platform — Phase 2 API",
+    description="CS2 2D Demo Replay & Analytics — Phase 3A API",
     version=settings.app_version,
     lifespan=lifespan,
 )
@@ -60,8 +70,15 @@ async def health():
         "service": "riftscope-api",
         "version": settings.app_version,
         "environment": settings.environment,
+        "backends": {
+            "parser": settings.parser_backend,
+            "storage": settings.storage_backend,
+            "queue": settings.queue_backend,
+        },
     }
 
 
 app.include_router(demos.router, prefix="/demos", tags=["demos"])
 app.include_router(players.router, prefix="/players", tags=["players"])
+app.include_router(maps.router, prefix="/maps", tags=["maps"])
+app.include_router(pro.router, prefix="/pro", tags=["pro"])

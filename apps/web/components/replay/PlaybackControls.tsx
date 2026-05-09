@@ -1,10 +1,11 @@
 "use client";
 
+import { useMemo } from "react";
 import { Pause, Play, RotateCcw, SkipBack, SkipForward } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { PlaybackControls, PlaybackSpeed, PlaybackState } from "@/lib/hooks/useRoundPlayback";
-import type { TimelineEvent } from "@/types/demo";
+import type { GrenadeSubtype, TimelineEvent } from "@/types/demo";
 
 const SPEEDS: PlaybackSpeed[] = [0.5, 1, 2, 4];
 
@@ -15,6 +16,14 @@ interface PlaybackControlsBarProps {
   events: TimelineEvent[];
 }
 
+/**
+ * Replay playback bar — CS2.CAM-style.
+ *
+ * The scrubber renders THREE event lanes:
+ *   • Top lane:  utility throws (▲ triangles, color-coded by grenade subtype)
+ *   • Middle:    bomb plant / defuse / explode markers
+ *   • Bottom:    kill bars colored by killer team (CT blue / T orange)
+ */
 export function PlaybackControlsBar({
   state,
   controls,
@@ -22,7 +31,7 @@ export function PlaybackControlsBar({
   events,
 }: PlaybackControlsBarProps) {
   return (
-    <div className="glass-card rounded-xl p-4 space-y-3">
+    <div className="rounded-xl bg-surface-elevated/50 border border-border/40 backdrop-blur-sm overflow-hidden">
       <Scrubber
         time={state.time}
         duration={duration}
@@ -30,7 +39,7 @@ export function PlaybackControlsBar({
         onSeek={controls.seek}
       />
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-border/40">
         <div className="flex items-center gap-1">
           <ControlButton onClick={controls.reset} title="Restart">
             <RotateCcw size={14} />
@@ -40,21 +49,20 @@ export function PlaybackControlsBar({
           </ControlButton>
           <button
             onClick={controls.toggle}
-            className="w-10 h-10 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center"
+            className="w-11 h-11 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center shadow-lg shadow-primary/20"
             title={state.playing ? "Pause" : "Play"}
           >
-            {state.playing ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
+            {state.playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
           </button>
           <ControlButton onClick={() => controls.step(5)} title="Forward 5s">
             <SkipForward size={14} />
           </ControlButton>
         </div>
 
-        <div className="flex items-center gap-3 font-mono-rs text-xs">
-          <span>
-            <span className="text-foreground">{formatTime(state.time)}</span>
-            <span className="text-muted-foreground"> / {formatTime(duration)}</span>
-          </span>
+        <div className="flex items-center gap-2 font-mono-rs text-sm">
+          <span className="text-foreground tabular-nums">{formatTime(state.time)}</span>
+          <span className="text-muted-foreground">/</span>
+          <span className="text-muted-foreground tabular-nums">{formatTime(duration)}</span>
         </div>
 
         <div className="flex items-center gap-1">
@@ -65,7 +73,7 @@ export function PlaybackControlsBar({
               className={cn(
                 "px-2.5 py-1 rounded-md text-xs font-mono-rs transition-colors",
                 state.speed === s
-                  ? "bg-surface-elevated text-foreground"
+                  ? "bg-primary-dim text-primary"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -98,6 +106,17 @@ function ControlButton({
   );
 }
 
+// =========================================================================
+// Scrubber with utility triangles + kill bars
+// =========================================================================
+
+const GRENADE_COLOR: Record<GrenadeSubtype, string> = {
+  smoke:   "hsl(220 8% 80%)",
+  flash:   "hsl(50 100% 65%)",
+  he:      "hsl(15 90% 55%)",
+  molotov: "hsl(20 95% 60%)",
+};
+
 function Scrubber({
   time,
   duration,
@@ -115,54 +134,122 @@ function Scrubber({
     onSeek(parseFloat(e.target.value));
   };
 
-  return (
-    <div className="relative">
-      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-surface-elevated" />
-      <div
-        className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-primary"
-        style={{ width: `${pct}%` }}
-      />
+  const { utilities, kills, bombs } = useMemo(() => {
+    const utilities: TimelineEvent[] = [];
+    const kills: TimelineEvent[] = [];
+    const bombs: TimelineEvent[] = [];
+    for (const e of events) {
+      if (e.type === "grenade_thrown") utilities.push(e);
+      else if (e.type === "kill") kills.push(e);
+      else if (
+        e.type === "bomb_planted" ||
+        e.type === "bomb_defused" ||
+        e.type === "bomb_exploded"
+      ) {
+        bombs.push(e);
+      }
+    }
+    return { utilities, kills, bombs };
+  }, [events]);
 
-      {/* Event markers (kills, bombs) along the scrubber */}
-      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 pointer-events-none">
-        {events.map((e, i) => {
+  return (
+    <div className="px-4 pt-3 pb-2 space-y-1.5">
+      {/* Lane 1: utility triangles ABOVE the scrubber */}
+      <div className="relative h-4 mx-1">
+        {utilities.map((e, i) => {
           if (duration === 0) return null;
           const left = (e.t / duration) * 100;
-          const color = eventMarkerColor(e);
-          if (!color) return null;
+          const color = GRENADE_COLOR[e.subtype as GrenadeSubtype] ?? "hsl(220 8% 70%)";
           return (
             <div
-              key={i}
-              className="absolute -translate-x-1/2 -top-0.5 w-1 h-2.5 rounded-sm"
-              style={{ left: `${left}%`, backgroundColor: color }}
+              key={`u-${i}`}
+              className="absolute top-0 -translate-x-1/2"
+              style={{ left: `${left}%` }}
+              title={`${formatTime(e.t)} · ${e.subtype}`}
+            >
+              <Triangle color={color} />
+            </div>
+          );
+        })}
+        {bombs.map((e, i) => {
+          if (duration === 0) return null;
+          const left = (e.t / duration) * 100;
+          const color = bombColor(e.type);
+          return (
+            <div
+              key={`b-${i}`}
+              className="absolute -bottom-1 -translate-x-1/2 w-2 h-2 rounded-full ring-2 ring-background"
+              style={{ left: `${left}%`, background: color }}
               title={`${formatTime(e.t)} · ${e.type}`}
             />
           );
         })}
       </div>
 
-      <input
-        type="range"
-        min={0}
-        max={duration}
-        step={0.05}
-        value={time}
-        onChange={handleChange}
-        className="relative w-full h-1.5 appearance-none bg-transparent cursor-pointer rs-scrubber"
-      />
+      {/* Scrubber line */}
+      <div className="relative">
+        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-surface" />
+        <div
+          className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-gradient-to-r from-primary to-primary/70"
+          style={{ width: `${pct}%` }}
+        />
+        <input
+          type="range"
+          min={0}
+          max={duration}
+          step={0.05}
+          value={time}
+          onChange={handleChange}
+          className="relative w-full h-1.5 appearance-none bg-transparent cursor-pointer rs-scrubber"
+        />
+      </div>
+
+      {/* Lane 2: kill bars BELOW the scrubber */}
+      <div className="relative h-4 mx-1">
+        {kills.map((e, i) => {
+          if (duration === 0) return null;
+          const left = (e.t / duration) * 100;
+          // Color by killer team — fall back to red if unknown.
+          const color = killColor(e);
+          const past = e.t <= time;
+          return (
+            <div
+              key={`k-${i}`}
+              className="absolute top-0 -translate-x-1/2 w-[3px] h-full rounded-sm transition-opacity"
+              style={{ left: `${left}%`, background: color, opacity: past ? 1 : 0.6 }}
+              title={`${formatTime(e.t)} · kill (${e.weapon ?? "?"})`}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-function eventMarkerColor(e: TimelineEvent): string | null {
-  if (e.type === "kill") return "hsl(350 80% 60%)";
-  if (e.type === "bomb_planted") return "hsl(0 80% 55%)";
-  if (e.type === "bomb_defused") return "hsl(150 60% 50%)";
-  if (e.type === "bomb_exploded") return "hsl(20 90% 55%)";
-  return null;
+function Triangle({ color }: { color: string }) {
+  // Down-pointing triangle: utility throws displayed above the timeline.
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10">
+      <polygon points="5,9 0,1 10,1" fill={color} stroke="hsl(220 16% 6%)" strokeWidth="0.5" />
+    </svg>
+  );
+}
+
+function killColor(e: TimelineEvent): string {
+  // The kill event itself doesn't carry the killer's team in the timeline,
+  // but headshots get a brighter shade to highlight them.
+  if (e.headshot) return "hsl(0 95% 65%)";
+  return "hsl(350 80% 55%)";
+}
+
+function bombColor(type: TimelineEvent["type"]): string {
+  if (type === "bomb_defused") return "hsl(150 70% 55%)";
+  if (type === "bomb_exploded") return "hsl(20 95% 55%)";
+  return "hsl(0 80% 55%)"; // planted
 }
 
 function formatTime(s: number): string {
+  if (!isFinite(s) || s < 0) s = 0;
   const mm = Math.floor(s / 60).toString().padStart(2, "0");
   const ss = Math.floor(s % 60).toString().padStart(2, "0");
   return `${mm}:${ss}`;

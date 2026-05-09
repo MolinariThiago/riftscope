@@ -131,7 +131,20 @@ export interface FramePlayer {
   name: string;
   x: number;
   y: number;
+  /** Facing direction in degrees (0 = +X, CCW positive). Optional for back-compat. */
+  yaw?: number;
   alive: boolean;
+  /** Hit points 0-100 at this frame. Optional for back-compat. */
+  hp?: number;
+}
+
+/** Per-player snapshot at the start of a round (weapon + economy + armor). */
+export interface PlayerLoadout {
+  weapon: string;
+  armor: number;
+  helmet: boolean;
+  kit: boolean;
+  money: number;
 }
 
 export interface TimelineFrame {
@@ -151,7 +164,7 @@ export type GrenadeSubtype = "smoke" | "flash" | "he" | "molotov";
 export interface TimelineEvent {
   t: number;
   type: TimelineEventType;
-  // common optional payloads
+  // common optional payloads — for kills/grenades this is the VICTIM/landing pos
   x?: number;
   y?: number;
   // kill
@@ -159,6 +172,9 @@ export interface TimelineEvent {
   victim?: string;
   weapon?: string;
   headshot?: boolean;
+  /** Killer position at the moment of the kill (world coords). */
+  killerX?: number;
+  killerY?: number;
   // bomb
   site?: "A" | "B";
   // grenade
@@ -166,6 +182,11 @@ export interface TimelineEvent {
   player?: string;
   team?: Team;
   expiresAt?: number;
+  /** Effect radius in world units, when applicable (smoke / molotov). */
+  radius?: number;
+  /** Thrower position when the grenade was released (world coords). */
+  throwerX?: number;
+  throwerY?: number;
 }
 
 export interface RoundTimeline {
@@ -174,6 +195,8 @@ export interface RoundTimeline {
   durationSeconds: number;
   frames: TimelineFrame[];
   events: TimelineEvent[];
+  /** Per-player loadout for THIS round, keyed by Steam ID. */
+  loadouts?: Record<string, PlayerLoadout>;
 }
 
 // =========================================================================
@@ -205,4 +228,45 @@ export interface PlayerSearchResponse {
   query: string;
   total: number;
   results: PlayerSearchResult[];
+}
+
+// =========================================================================
+// Map metadata (Phase 3A)
+// =========================================================================
+
+export interface MapCallout {
+  name: string;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+export interface MapMetadata {
+  name: string;
+  displayName: string;
+
+  // Radar projection (Valve overview <map>.txt constants).
+  // radarPx = (world - posXY) / scale
+  posX: number;
+  posY: number;
+  scale: number;
+  radarSize: number;
+
+  // Asset URLs (relative to the web root).
+  radarUrl: string;
+  radarUrlLower: string | null;
+  lowerThresholdZ: number | null;
+
+  // World bounds (derived from radar projection).
+  worldMinX: number;
+  worldMaxX: number;
+  worldMinY: number;
+  worldMaxY: number;
+
+  // Anchors in WORLD coordinates.
+  siteA: [number, number];
+  siteB: [number, number];
+  spawnCt: [number, number];
+  spawnTt: [number, number];
+  callouts: MapCallout[];
 }
