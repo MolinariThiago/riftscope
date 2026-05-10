@@ -15,8 +15,10 @@ from sqlalchemy.orm import Session
 
 from db.database import get_db
 from db.models.demo import Demo
+from db.models.insight import DemoInsight
 from schemas.demo import (
     DemoAnalysisResponse,
+    DemoInsightsResponse,
     DemoStatusResponse,
     DemoSummary,
     DemoUploadResponse,
@@ -144,6 +146,29 @@ async def get_demo_analysis(demo_id: int, db: Session = Depends(get_db)):
         economy=demo.analysis_data.get("economy", []),
         heatmapPoints=demo.analysis_data.get("heatmapPoints", []),
         timeline=timeline_meta,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Insights — pre-computed heuristic analytics (served from cache)
+# ---------------------------------------------------------------------------
+@router.get("/{demo_id}/insights", response_model=DemoInsightsResponse)
+async def get_demo_insights(demo_id: int, db: Session = Depends(get_db)):
+    demo = db.query(Demo).filter(Demo.id == demo_id).first()
+    if not demo:
+        raise HTTPException(status_code=404, detail="Demo not found")
+    if demo.status != "completed":
+        raise HTTPException(status_code=409, detail=f"Demo is not ready (status={demo.status})")
+    row = db.query(DemoInsight).filter(DemoInsight.demo_id == demo_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Insights not computed yet — re-run processing.")
+    return DemoInsightsResponse(
+        engineVersion=row.engine_version,
+        summary=row.summary or {},
+        rounds=row.rounds or [],
+        players=row.players or [],
+        heatmap=row.heatmap or {},
+        computedAt=row.computed_at,
     )
 
 

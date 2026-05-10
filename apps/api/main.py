@@ -18,6 +18,7 @@ from core.settings import get_settings
 from db.database import Base, engine
 # Import all models BEFORE create_all so SQLAlchemy registers their tables.
 from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound  # noqa: F401
+from db.models.insight import DemoInsight  # noqa: F401
 from db.models.pro_match import ProMatch  # noqa: F401
 from routers import demos, maps, players, pro
 

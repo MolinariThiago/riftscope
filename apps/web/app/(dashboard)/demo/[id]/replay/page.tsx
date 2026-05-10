@@ -14,16 +14,22 @@ import {
   RotateCcw,
 } from "lucide-react";
 
+import dynamic from "next/dynamic";
+
 import { ExchangesPanel } from "@/components/replay/ExchangesPanel";
+import { InsightsPanel } from "@/components/replay/InsightsPanel";
 import { KillFeed } from "@/components/replay/KillFeed";
 import { LayersPanel } from "@/components/replay/LayersPanel";
-import {
-  DEFAULT_LAYERS,
-  MapCanvas,
-  type ReplayLayers,
-} from "@/components/replay/MapCanvas";
+import { DEFAULT_LAYERS, type ReplayLayers } from "@/components/replay/layers";
 import { ReplayTimelineBar } from "@/components/replay/ReplayTimelineBar";
 import { TeamLoadoutPanel } from "@/components/replay/TeamLoadoutPanel";
+
+// Pixi/WebGL renderer is browser-only — bundled separately so SSR + first
+// paint don't pay the WebGL cost.
+const PixiMapCanvas = dynamic(
+  () => import("@/components/replay/PixiMapCanvas").then((m) => m.PixiMapCanvas),
+  { ssr: false },
+);
 import {
   useDemo,
   useDemoAnalysis,
@@ -140,7 +146,7 @@ export default function ReplayPage() {
               </div>
             </div>
           )}
-          <MapCanvas
+          <PixiMapCanvas
             mapName={analysis.demo.map}
             mapMeta={mapMeta}
             frame={state.currentFrame}
@@ -199,8 +205,13 @@ export default function ReplayPage() {
           />
         </aside>
 
-        {/* RIGHT TOP — Exchanges + Killfeed (compact, stacked) */}
-        <aside className="absolute top-3 right-3 w-[280px] flex flex-col gap-2 pointer-events-none">
+        {/* RIGHT TOP — Insights (precomputed) + Exchanges + Killfeed */}
+        <aside className="absolute top-3 right-3 w-[280px] flex flex-col gap-2 pointer-events-none max-h-[calc(100%-1.5rem)] overflow-y-auto">
+          {demoId && (
+            <div className="pointer-events-auto">
+              <InsightsPanel demoId={demoId} currentRound={currentRound} />
+            </div>
+          )}
           <div className="pointer-events-auto">
             <ExchangesPanel
               events={state.pastEvents}

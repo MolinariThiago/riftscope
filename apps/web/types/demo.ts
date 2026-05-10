@@ -231,6 +231,79 @@ export interface PlayerSearchResponse {
 }
 
 // =========================================================================
+// Insights (precomputed heuristic analytics)
+// =========================================================================
+
+export type InsightSeverity = "info" | "good" | "bad";
+export type InsightKind =
+  | "opening_duel"
+  | "trade"
+  | "fast_plant"
+  | "eco_win"
+  | "anti_eco_loss"
+  | "defuse"
+  | "explode";
+
+export interface RoundInsight {
+  kind: InsightKind | string;
+  round: number;
+  team: Team | null;
+  severity: InsightSeverity;
+  title: string;
+  summary: string;
+  evidence: Record<string, unknown>;
+}
+
+export interface RoundInsightGroup {
+  round: number;
+  winner: Team | null;
+  endReason: string | null;
+  bombSite: "A" | "B" | null;
+  insights: RoundInsight[];
+}
+
+export interface PlayerInsightRollup {
+  steamId: string;
+  name: string;
+  team: Team;
+  kills: number;
+  deaths: number;
+  assists: number;
+  rating: number;
+  adr: number;
+  kast: number;
+  openingKills: number;
+  openingDeaths: number;
+  tradesMade: number;
+  timesTraded: number;
+}
+
+export interface DemoInsights {
+  engineVersion: string;
+  summary: {
+    rounds: number;
+    ctWins: number;
+    ttWins: number;
+    totalKills: number;
+    headshots: number;
+    fastPlants: number;
+    ecoWins: number;
+    tradeKills: number;
+    openingDuels: number;
+    topPerformer: { name: string; team: Team; rating: number } | null;
+  };
+  rounds: RoundInsightGroup[];
+  players: PlayerInsightRollup[];
+  heatmap: {
+    grid: number;
+    worldBounds?: [number, number, number, number];
+    cells: { x: number; y: number; kill: number; death: number }[];
+    max: number;
+  };
+  computedAt: string | null;
+}
+
+// =========================================================================
 // Map metadata (Phase 3A)
 // =========================================================================
 

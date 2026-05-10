@@ -2,6 +2,7 @@
 
 import type {
   DemoAnalysis,
+  DemoInsights,
   DemoStatusPayload,
   DemoSummary,
   DemoUploadResponse,
@@ -58,6 +59,8 @@ export const api = {
       request<DemoStatusPayload>(`/demos/${id}/status`),
     analysis: (id: string | number) =>
       request<DemoAnalysis>(`/demos/${id}/analysis`),
+    insights: (id: string | number) =>
+      request<DemoInsights>(`/demos/${id}/insights`),
     timeline: (id: string | number, round: number) =>
       request<RoundTimeline>(`/demos/${id}/timeline/${round}`),
     upload: (formData: FormData) =>

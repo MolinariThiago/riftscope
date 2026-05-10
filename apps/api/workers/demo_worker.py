@@ -25,6 +25,8 @@ from typing import Any
 
 from db.database import SessionLocal
 from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound
+from db.models.insight import DemoInsight
+from services.insights import compute_insights, ENGINE_VERSION as INSIGHTS_VERSION
 from services.parser_factory import get_parser
 
 logger = logging.getLogger("riftscope.worker")
@@ -142,6 +144,47 @@ def _persist_normalized(demo_id: int, analysis: dict[str, Any]) -> None:
         db.close()
 
 
+def _persist_insights(demo_id: int, analysis: dict[str, Any]) -> None:
+    """
+    Compute and persist the heuristic insights payload for this demo.
+
+    Idempotent: replaces any prior row for the demo so reprocessing always
+    yields the latest engine_version. Failures are logged but never block
+    the rest of the pipeline — the demo is still marked completed.
+    """
+    db = SessionLocal()
+    try:
+        try:
+            payload = compute_insights(analysis)
+        except Exception:
+            logger.exception("insights computation failed for demo %s", demo_id)
+            return
+
+        existing = db.query(DemoInsight).filter(DemoInsight.demo_id == demo_id).first()
+        if existing:
+            existing.engine_version = payload.get("engine_version", INSIGHTS_VERSION)
+            existing.summary = payload.get("summary", {})
+            existing.rounds = payload.get("rounds", [])
+            existing.players = payload.get("players", [])
+            existing.heatmap = payload.get("heatmap", {})
+            existing.computed_at = datetime.utcnow()
+        else:
+            db.add(DemoInsight(
+                demo_id=demo_id,
+                engine_version=payload.get("engine_version", INSIGHTS_VERSION),
+                summary=payload.get("summary", {}),
+                rounds=payload.get("rounds", []),
+                players=payload.get("players", []),
+                heatmap=payload.get("heatmap", {}),
+            ))
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("persist_insights db failure for demo %s", demo_id)
+    finally:
+        db.close()
+
+
 async def process_demo(demo_id: int, file_path: str) -> None:
     """
     Main async demo processing pipeline.
@@ -180,6 +223,7 @@ async def process_demo(demo_id: int, file_path: str) -> None:
             analysis_data=analysis,
         )
         _persist_normalized(demo_id, analysis)
+        _persist_insights(demo_id, analysis)
         logger.info("demo %s: completed", demo_id)
 
     except Exception as exc:  # pragma: no cover — defensive

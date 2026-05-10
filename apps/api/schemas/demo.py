@@ -107,6 +107,19 @@ class MapCalloutResponse(BaseModel):
     radius: float
 
 
+class DemoInsightsResponse(BaseModel):
+    """Pre-computed insights payload — served from cache, never live."""
+
+    engine_version: str = Field(..., alias="engineVersion")
+    summary: dict[str, Any]
+    rounds: list[dict[str, Any]]
+    players: list[dict[str, Any]]
+    heatmap: dict[str, Any]
+    computed_at: Optional[datetime] = Field(None, alias="computedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class MapMetadataResponse(BaseModel):
     name: str
     display_name: str = Field(..., alias="displayName")

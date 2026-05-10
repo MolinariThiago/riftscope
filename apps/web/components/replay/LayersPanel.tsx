@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { ReplayLayers } from "@/components/replay/MapCanvas";
+import type { ReplayLayers } from "@/components/replay/layers";
 
 interface LayersPanelProps {
   layers: ReplayLayers;

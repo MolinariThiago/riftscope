@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import { DEFAULT_LAYERS, type ReplayLayers } from "@/components/replay/MapCanvas";
+import { DEFAULT_LAYERS, type ReplayLayers } from "@/components/replay/layers";
 
 // ---------------------------------------------------------------------------
 // Theme + locale + replay + privacy preferences (persisted in localStorage).
