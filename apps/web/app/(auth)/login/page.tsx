@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { Eye, EyeOff, ArrowRight, Loader2 } from "lucide-react";
 
+import { api } from "@/lib/api";
+
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -90,7 +92,21 @@ export default function LoginPage() {
 
       {/* OAuth */}
       <div className="grid grid-cols-2 gap-3">
-        <OAuthButton provider="Steam" icon="🎮" />
+        <button
+          type="button"
+          onClick={() => {
+            // Full-page redirect to the backend's Steam OpenID start
+            // route. The backend 302s the browser to Steam's login
+            // page; Steam then redirects back to
+            // ``/auth/steam/callback`` (Next.js) which calls
+            // ``/auth/steam/callback`` on the API to finish.
+            window.location.href = api.auth.steam.loginUrl();
+          }}
+          className="flex items-center justify-center gap-2 py-2.5 border border-border rounded-lg text-sm text-foreground hover:bg-surface-elevated transition-colors"
+        >
+          <span>🎮</span>
+          Steam
+        </button>
         <OAuthButton provider="Discord" icon="💬" />
       </div>
 

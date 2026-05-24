@@ -9,50 +9,104 @@ interface RoundSelectorProps {
   onSelect: (roundNumber: number) => void;
 }
 
+/**
+ * CS2.CAM-style horizontal round strip — every round always visible.
+ *
+ * Each cell uses ``flex-1`` so the strip fills the container width regardless
+ * of how many rounds the demo has (16, 22, 30, +OT). Cells shrink uniformly
+ * down to a minimum of ~26px before relying on container scroll. The half
+ * break (R12 → R13) is shown as a thin vertical divider rather than a gap
+ * the user has to scroll past.
+ */
 export function RoundSelector({ rounds, current, onSelect }: RoundSelectorProps) {
   if (rounds.length === 0) return null;
 
+  const halfPoint = Math.floor(rounds.length / 2);
+
   return (
-    <div className="glass-card rounded-xl p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-mono-rs uppercase tracking-wider text-muted-foreground">
-          Rounds
-        </h3>
-        <span className="text-xs font-mono-rs text-muted-foreground">
-          {current} / {rounds.length}
-        </span>
-      </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(36px,1fr))] gap-1.5">
-        {rounds.map((r) => {
+    <div className="rounded-xl bg-gradient-to-b from-surface-elevated/60 to-surface-elevated/30 border border-border/40 backdrop-blur-sm p-2 shadow-lg">
+      <div className="flex items-stretch gap-[2px] w-full">
+        {rounds.map((r, idx) => {
           const active = r.number === current;
           const ctWon = r.winner === "ct";
+          const showHalfBreak = idx === halfPoint && idx > 0;
           return (
-            <button
-              key={r.number}
-              onClick={() => onSelect(r.number)}
-              className={cn(
-                "relative h-12 rounded-md flex flex-col items-center justify-center text-xs font-mono-rs transition-all",
-                active
-                  ? "ring-2 ring-primary scale-105"
-                  : "hover:ring-1 hover:ring-border",
-                ctWon ? "bg-ct/15 text-ct" : "bg-tt/15 text-tt",
-              )}
-              title={`Round ${r.number} — ${r.winner.toUpperCase()} ${
-                r.endReason
-              }`}
-            >
-              <span className="text-[10px] opacity-70 leading-none">R</span>
-              <span className="font-bold leading-tight">{r.number}</span>
-              {r.bombPlanted && (
-                <span
-                  className="absolute top-0.5 right-0.5 w-1 h-1 rounded-full"
-                  style={{ background: "hsl(0 80% 55%)" }}
+            <div key={r.number} className="flex items-stretch flex-1 min-w-0">
+              {showHalfBreak && (
+                <div
+                  className="self-stretch w-px bg-border/60 mx-1"
+                  aria-hidden
                 />
               )}
-            </button>
+              <RoundCell round={r} active={active} ctWon={ctWon} onSelect={onSelect} />
+            </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+function RoundCell({
+  round: r,
+  active,
+  ctWon,
+  onSelect,
+}: {
+  round: Round;
+  active: boolean;
+  ctWon: boolean;
+  onSelect: (n: number) => void;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(r.number)}
+      className={cn(
+        "relative flex-1 h-12 min-w-0 flex flex-col items-center justify-center font-mono-rs",
+        "rounded-md border transition-all duration-150",
+        active
+          ? "border-primary scale-[1.04] z-10 shadow-md shadow-primary/30"
+          : "border-transparent hover:border-border/60",
+        active
+          ? ctWon
+            ? "bg-ct/20"
+            : "bg-tt/20"
+          : ctWon
+            ? "bg-ct/8 hover:bg-ct/15"
+            : "bg-tt/8 hover:bg-tt/15",
+      )}
+      title={`Round ${r.number} — ${r.winner.toUpperCase()} ${r.endReason}${r.bombPlanted ? ` · bomb ${r.bombSite}` : ""}`}
+    >
+      <span
+        className={cn(
+          "text-[9px] uppercase opacity-50 leading-none",
+          ctWon ? "text-ct" : "text-tt",
+        )}
+      >
+        R
+      </span>
+      <span
+        className={cn(
+          "text-sm font-bold leading-none tabular-nums mt-0.5",
+          ctWon ? "text-ct" : "text-tt",
+        )}
+      >
+        {r.number}
+      </span>
+      {r.bombPlanted && (
+        <span
+          className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-loss shadow-[0_0_4px_currentColor] text-loss"
+          title={`Bomb planted on ${r.bombSite ?? "?"}`}
+        />
+      )}
+      {/* end-reason micro-indicator */}
+      <span
+        className={cn(
+          "absolute bottom-0.5 left-1/2 -translate-x-1/2 h-0.5 rounded-full transition-all",
+          active ? "w-6" : "w-3 opacity-60",
+          ctWon ? "bg-ct" : "bg-tt",
+        )}
+      />
+    </button>
   );
 }

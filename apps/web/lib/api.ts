@@ -2,9 +2,11 @@
 
 import type {
   DemoAnalysis,
+  DemoInsights,
   DemoStatusPayload,
   DemoSummary,
   DemoUploadResponse,
+  MapMetadata,
   PlayerSearchResponse,
   RoundTimeline,
 } from "@/types/demo";
@@ -30,7 +32,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+  // ``credentials: "include"`` is REQUIRED for the auth cookie to flow
+  // on cross-origin requests (the frontend lives on :3000, the API on
+  // :8000 in dev). The default ``same-origin`` policy would drop the
+  // cookie and every /auth/me call would 401.
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
+    ...options,
+    headers,
+  });
 
   if (!res.ok) {
     let message = res.statusText;
@@ -57,6 +67,8 @@ export const api = {
       request<DemoStatusPayload>(`/demos/${id}/status`),
     analysis: (id: string | number) =>
       request<DemoAnalysis>(`/demos/${id}/analysis`),
+    insights: (id: string | number) =>
+      request<DemoInsights>(`/demos/${id}/insights`),
     timeline: (id: string | number, round: number) =>
       request<RoundTimeline>(`/demos/${id}/timeline/${round}`),
     upload: (formData: FormData) =>
@@ -66,6 +78,8 @@ export const api = {
       }),
     delete: (id: string | number) =>
       request<void>(`/demos/${id}`, { method: "DELETE" }),
+    reprocess: (id: string | number) =>
+      request<DemoStatusPayload>(`/demos/${id}/reprocess`, { method: "POST" }),
   },
 
   players: {
@@ -74,4 +88,292 @@ export const api = {
         `/players/search?query=${encodeURIComponent(query)}`,
       ),
   },
+
+  maps: {
+    list: () => request<MapMetadata[]>("/maps"),
+    get: (name: string) =>
+      request<MapMetadata>(`/maps/${encodeURIComponent(name)}`),
+  },
+
+  pro: {
+    matches: (limit = 50) =>
+      request<{
+        total: number;
+        /** ISO datetime — the earliest played_at the API will surface.
+         *  Driven by ``PRO_INDEX_FROM`` env (defaults to today UTC). */
+        indexFrom: string;
+        matches: Array<{
+          id: number;
+          source: string;
+          sourceMatchId: string;
+          teamA: string;
+          teamB: string;
+          scoreA: number | null;
+          scoreB: number | null;
+          map: string | null;
+          event: string | null;
+          /** Competitive tier (S+/S/A/B/C or null). Set by admin at
+           *  upload; consumed by the AI scoring engine downstream.
+           *  Intentionally NOT shown in public match cards — keep
+           *  the public feed clean while the metadata lives in DB. */
+          tier: "S+" | "S" | "A" | "B" | "C" | null;
+          playedAt: string | null;
+          demoUrl: string | null;
+          demoId: number | null;
+        }>;
+      }>(`/pro/matches?limit=${limit}`),
+    sync: () =>
+      request<{
+        inserted: number;
+        updated: number;
+        /** Liquipedia matches older than the cutoff that we dropped
+         *  instead of inserting. Surfaced so the manual sync result
+         *  chip can be honest about what was filtered. */
+        skipped_before_cutoff?: number;
+        errors: unknown[];
+      }>("/pro/sync", { method: "POST" }),
+    /** Trigger the server-side import: downloads the demo from HLTV,
+     *  drops the .dem(s) into storage, enqueues parsing, and links
+     *  the ProMatch to the new Demo row.
+     *
+     *  Status values:
+     *    - ``queued``: file is being parsed in the background. Poll
+     *      ``/demos/{demo_id}/status`` for progress.
+     *    - ``existing``: was already imported earlier. demo_id points
+     *      at the existing Demo.
+     *    - ``unsupported_archive``: HLTV served a .rar we can't
+     *      extract; UX must direct the user to the manual link.
+     */
+    import: (matchId: number) =>
+      request<{
+        demo_id: number;
+        status: "queued" | "existing" | "unsupported_archive";
+        message: string;
+      }>(`/pro/matches/${matchId}/import`, { method: "POST" }),
+    /** Verify the configured outbound proxy actually changes the IP.
+     *  Use the "Probar proxy" button on /pro to check before relying
+     *  on it. Returns the direct + proxy public IPs so you can see
+     *  whether the proxy is routing or passing through. */
+    testProxy: () =>
+      request<{
+        configured: { var: string; value: string } | null;
+        direct_ip: string | null;
+        proxy_ip: string | null;
+        proxy_ok: boolean;
+        proxy_latency_ms?: number;
+        errors: string[];
+      }>("/pro/proxy-test"),
+    /** Admin-only manual upload — publishes a pro match to /pro by
+     *  uploading the .dem file directly. Returns the new pro_match_id
+     *  and demo_id; the demo goes through the normal parse pipeline
+     *  and becomes watchable in 2D once parsing completes. */
+    uploadMatch: (form: FormData) =>
+      request<{
+        pro_match_id: number;
+        demo_id: number;
+        status: string;
+        message: string;
+      }>("/pro/matches/upload", {
+        method: "POST",
+        body: form,
+        // Don't set Content-Type — the browser MUST pick the
+        // multipart boundary itself for FormData uploads.
+      }),
+    /** Tiny status endpoint that surfaces what the background
+     *  scheduler is doing. The UI shows a discreet "Auto-import
+     *  activo" pill when ``running`` is true so the user knows
+     *  the page is being kept up to date in the background. */
+    schedulerStatus: () =>
+      request<{
+        enabled: boolean;
+        running: boolean;
+        interval_seconds: number;
+        import_gap_seconds: number;
+        max_imports_per_tick: number;
+        /** ISO datetime — the cutoff applied to sync + import + list. */
+        index_from: string;
+        last_tick_at: string | null;
+        last_sync_at: string | null;
+        last_sync_result: {
+          inserted: number;
+          updated: number;
+          errors: number;
+        } | null;
+        last_import_count: number;
+        last_import_errors: number;
+        last_import_status: Record<string, number> | null;
+        /** RAR extraction state — surfaces whether unrar is functional
+         *  so the UI can warn the operator if HLTV .rar demos are being
+         *  silently skipped. */
+        rar_extraction: {
+          available: boolean;
+          path: string | null;
+          source: string;
+        };
+        /** > 0 when Liquipedia is rate-limiting us. The UI shows a
+         *  yellow banner so users know why no new matches are flowing
+         *  in — it's the source, not a bug on our side. */
+        liquipedia_cooldown_seconds: number;
+      }>("/pro/scheduler/status"),
+  },
+
+  // -----------------------------------------------------------------------
+  // Auth — Steam OpenID flow + cookie-backed session.
+  //
+  // /auth/me returns the full serialized user (see _serialize_user in
+  // apps/api/routers/auth.py). /auth/steam/login is a server-side 302 so
+  // the frontend just navigates to it directly via window.location — we
+  // expose it here only for completeness.
+  // -----------------------------------------------------------------------
+  auth: {
+    me: () => request<AuthUser>("/auth/me"),
+    session: () =>
+      request<{ authenticated: boolean; user: AuthUser | null }>("/auth/session"),
+    logout: () => request<void>("/auth/logout", { method: "POST" }),
+    steam: {
+      // Backend issues a 302 here — fetch'ing it directly wouldn't follow
+      // the cross-origin redirect, so the frontend should navigate the
+      // browser to ``${API_BASE_URL}/auth/steam/login`` instead.
+      loginUrl: () => `${API_BASE_URL}/auth/steam/login`,
+      callback: (params: string) =>
+        request<AuthUser>(`/auth/steam/callback?${params}`),
+      /** Save the player's personal Steam Web API key (32-char hex).
+       *  Backend validates the format and stores it on their User
+       *  row. Used by the demo-extractor flow to pull the player's
+       *  match history. */
+      setApiKey: (apiKey: string) =>
+        request<{ ok: boolean; has_steam_api_key: boolean }>(
+          "/auth/me/steam-api-key",
+          {
+            method: "PUT",
+            body: JSON.stringify({ api_key: apiKey }),
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      clearApiKey: () =>
+        request<{ ok: boolean; has_steam_api_key: boolean }>(
+          "/auth/me/steam-api-key",
+          { method: "DELETE" },
+        ),
+    },
+  },
+
+  // -----------------------------------------------------------------------
+  // Admin — gated by ``require_admin`` on the backend. Shapes match the
+  // real responses in apps/api/routers/admin.py.
+  // -----------------------------------------------------------------------
+  admin: {
+    metrics: () =>
+      request<{
+        total_users: number;
+        active_users: number;
+        admins: number;
+        pro_users: number;
+        total_demos: number;
+        processed_demos: number;
+        failed_demos: number;
+        in_flight_demos: number;
+        stripe_revenue: number | null;
+        api_cost: number | null;
+        monetization_enabled: boolean;
+      }>("/admin/metrics"),
+    growth: (days = 28) =>
+      request<{
+        days: number;
+        granularity: string;
+        series: Array<{ bucket: string; users: number; demos: number }>;
+      }>(`/admin/growth?days=${days}`),
+    users: (limit = 100, offset = 0) =>
+      request<{
+        total: number;
+        limit: number;
+        offset: number;
+        items: Array<{
+          id: string;
+          email: string | null;
+          username: string | null;
+          name: string;
+          tier: "free" | "pro";
+          subscription_status: string;
+          role: "admin" | "user";
+          status: "active" | "banned";
+          demos_count: number;
+          created_at: string | null;
+          last_login: string | null;
+        }>;
+      }>(`/admin/users?limit=${limit}&offset=${offset}`),
+    incidents: () =>
+      request<
+        Array<{
+          id: string;
+          filename: string;
+          user_id: string | null;
+          error: string;
+          date: string | null;
+        }>
+      >("/admin/incidents"),
+    setTier: (userId: string, tier: "free" | "pro") =>
+      request<{ id: string; tier: string; status: string }>(
+        `/admin/users/${userId}/tier`,
+        {
+          method: "POST",
+          body: JSON.stringify({ tier }),
+        },
+      ),
+    // Backend payload is ``{ value: bool }`` — a single ``_Toggle`` model
+    // is reused for both admin + active flips so the API surface stays
+    // symmetrical. Don't change to ``{ is_admin }`` without updating the
+    // server side first.
+    setAdmin: (userId: string, isAdmin: boolean) =>
+      request<{ id: string; is_admin: boolean }>(
+        `/admin/users/${userId}/admin`,
+        {
+          method: "POST",
+          body: JSON.stringify({ value: isAdmin }),
+        },
+      ),
+    setActive: (userId: string, isActive: boolean) =>
+      request<{ id: string; is_active: boolean }>(
+        `/admin/users/${userId}/active`,
+        {
+          method: "POST",
+          body: JSON.stringify({ value: isActive }),
+        },
+      ),
+    deleteDemo: (demoId: number) =>
+      request<{ ok: boolean }>(`/admin/demos/${demoId}`, { method: "DELETE" }),
+  },
 };
+
+/**
+ * Shape returned by ``/auth/me`` and ``/auth/steam/callback``. Mirrors
+ * ``_serialize_user`` in ``apps/api/routers/auth.py`` — keep them in sync.
+ */
+export interface AuthUser {
+  id: string;
+  email: string | null;
+  username: string | null;
+  name: string;
+  steam_id: string | null;
+  avatar_url: string | null;
+  /** Canonical https://steamcommunity.com/... profile URL. Always
+   *  populated for Steam-linked users (falls back to the numeric
+   *  ``/profiles/{steam_id}`` form when the Web API isn't reachable). */
+  steam_profile_url: string | null;
+  /** Real name, if the user filled it in their Steam profile. */
+  steam_realname: string | null;
+  /** ISO 3166 country code (privacy-locked profiles may omit it). */
+  steam_country: string | null;
+  /** True when the user has saved their personal Steam Web API key
+   *  (the one for fetching their match history). The raw value is
+   *  NEVER returned by the API — only this boolean. */
+  has_steam_api_key: boolean;
+  is_admin: boolean;
+  is_active: boolean;
+  tier: "free" | "pro";
+  subscription_status: string;
+  role: "admin" | "user";
+  status: "active" | "banned";
+  created_at: string | null;
+  last_login: string | null;
+}

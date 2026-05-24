@@ -14,3 +14,39 @@ pydantic-settings>=2.7.0,<3.0
 python-multipart>=0.0.20,<1.0
 aiofiles>=24.1.0,<25.0
 httpx>=0.28.1,<1.0
+
+# PostgreSQL driver — required in production (DATABASE_URL=postgresql://...).
+# Dev still uses SQLite (built-in) so this is just for prod.
+psycopg2-binary>=2.9,<3.0
+
+# SOCKS proxy support for httpx — enables routing scraper traffic
+# (Liquipedia, HLTV) through Tor / a residential proxy via env vars
+# (``LIQUIPEDIA_PROXY``, ``HLTV_PROXY``, ``HTTPS_PROXY``). Required
+# when Cloudflare flags the host IP for rate-limiting.
+socksio>=1.0,<2.0
+
+# RAR archive support — HLTV serves most pro demos as .rar archives,
+# so without this the auto-import flow can't extract the .dem files.
+# Pure-Python at install time; requires an ``unrar`` binary at
+# runtime (auto-downloaded from rarlab on first use; see
+# services.rar_runtime).
+rarfile>=4.2,<5.0
+
+# CS2 demo parser — Rust-backed, ships precompiled wheels for Win/Linux/macOS.
+# When a wheel is unavailable for the runtime Python, the factory falls back
+# to the stub parser so the dev pipeline still runs end-to-end.
+demoparser2>=0.41.0,<1.0
+
+# Auth (JWT + password hashing). ``bcrypt 5.x`` is allowed because the
+# 4 → 5 transition didn't break passlib's hashlib-backed interface.
+python-jose[cryptography]>=3.3.0,<4
+bcrypt>=4.1.0,<6
+
+# Object storage (Cloudflare R2 / AWS S3 / MinIO) via the S3 API.
+# Only required when STORAGE_BACKEND=s3, but installed in the base image
+# so flipping the env doesn't need a redeploy.
+boto3>=1.34.0,<2
+
+# Stripe (billing). Used by routers/billing.py — gated behind the
+# monetization_enabled feature flag.
+stripe>=11.0.0,<13

@@ -50,6 +50,21 @@ export function useDemoAnalysis(id: string | number | null, enabled = true) {
 }
 
 /**
+ * Pre-computed insights — heuristic analytics persisted in DemoInsight at
+ * processing time. Cached aggressively because the engine_version captures
+ * any logic change that would invalidate it.
+ */
+export function useDemoInsights(id: string | number | null, enabled = true) {
+  return useQuery({
+    queryKey: ["demo-insights", id],
+    queryFn: () => api.demos.insights(id!),
+    enabled: enabled && id !== null && id !== undefined,
+    staleTime: 60 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+  });
+}
+
+/**
  * Per-round timeline for the 2D replay viewer.
  * Cached for 30 minutes since timelines are deterministic and heavy (~1MB).
  */

@@ -1,0 +1,669 @@
+"use client";
+
+import Link from "next/link";
+import Image from "next/image";
+import { useMemo, useState } from "react";
+import {
+  Award,
+  Check,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Film,
+  KeyRound,
+  Link2,
+  Loader2,
+  Trash2,
+  Trophy,
+  User,
+} from "lucide-react";
+
+import { api } from "@/lib/api";
+import { useDemos } from "@/lib/hooks/useDemos";
+import { useT } from "@/lib/i18n/useT";
+import { useAuthStore } from "@/lib/stores/auth";
+import { useSettings } from "@/lib/stores/settings";
+import { cn, formatDuration } from "@/lib/utils";
+
+type Tab = "overview" | "demos" | "achievements" | "integrations";
+
+export default function ProfilePage() {
+  const t = useT();
+  const settings = useSettings();
+  const user = useAuthStore((s) => s.user);
+  const { data: demos = [] } = useDemos();
+  const [tab, setTab] = useState<Tab>("overview");
+
+  // Steam linkage signal — true when the auth store has a Steam-linked
+  // user. The old code read ``settings.steamLinked`` from a local-only
+  // store that never reflected the real OpenID flow, so the badge
+  // always showed "Steam —" after login. Now the real auth source
+  // drives every UI piece (header avatar + name, integration card,
+  // badges).
+  const steamLinked = !!user?.steam_id;
+
+  const completed = useMemo(
+    () => demos.filter((d) => d.status === "completed"),
+    [demos],
+  );
+
+  const aggregates = useMemo(() => {
+    let totalDemos = completed.length;
+    let totalRounds = 0;
+    let totalDuration = 0;
+    const mapCounts: Record<string, number> = {};
+    for (const d of completed) {
+      totalRounds += d.roundCount ?? 0;
+      totalDuration += d.durationSeconds ?? 0;
+      if (d.map) mapCounts[d.map] = (mapCounts[d.map] ?? 0) + 1;
+    }
+    const favoriteMap =
+      Object.entries(mapCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    return { totalDemos, totalRounds, totalDuration, favoriteMap, mapCounts };
+  }, [completed]);
+
+  const TABS: { key: Tab; label: string; icon: typeof User }[] = [
+    { key: "overview",     label: t("profile.overview"),    icon: User },
+    { key: "demos",        label: t("profile.demos"),       icon: Film },
+    { key: "achievements", label: t("profile.achievements"), icon: Trophy },
+    { key: "integrations", label: t("profile.integrations"), icon: Link2 },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header — pulls avatar / name / real-name / country from the
+          live auth store so a Steam-linked user sees their actual
+          profile instead of the old "Anonymous Player" placeholder. */}
+      <div className="glass-card rounded-xl p-6 flex flex-col sm:flex-row sm:items-center gap-5">
+        <div className="w-20 h-20 rounded-full bg-primary-dim flex items-center justify-center flex-shrink-0 overflow-hidden">
+          {user?.avatar_url ? (
+            <Image
+              src={user.avatar_url}
+              alt={user.name ?? "Steam avatar"}
+              width={80}
+              height={80}
+              className="w-full h-full object-cover"
+              unoptimized
+            />
+          ) : (
+            <User size={32} className="text-primary" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-display font-bold flex items-center gap-2 flex-wrap">
+            {user?.name ?? "Anonymous Player"}
+            {user?.is_admin && (
+              <span className="text-[10px] font-mono-rs uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary/15 text-primary">
+                ADMIN
+              </span>
+            )}
+          </h1>
+          {/* Sub-line: real name + country flag emoji when available,
+              else the hint about linking a profile. */}
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {user?.steam_realname || user?.steam_country
+              ? [user?.steam_realname, user?.steam_country]
+                  .filter(Boolean)
+                  .join(" · ")
+              : user
+                ? `Steam ID: ${user.steam_id}`
+                : t("profile.noProfileHint")}
+          </p>
+          <div className="flex flex-wrap gap-2 mt-3">
+            <Badge label={steamLinked ? "Steam ✓" : "Steam —"} />
+            <Badge label={settings.faceitLinked ? "Faceit ✓" : "Faceit —"} />
+            <Badge label={settings.hltvProfileUrl ? "HLTV ✓" : "HLTV —"} />
+          </div>
+        </div>
+        <Link
+          href="/settings"
+          className="px-3 py-2 rounded-lg text-xs border border-border hover:border-primary hover:text-primary transition-colors"
+        >
+          {t("nav.settings")}
+        </Link>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 p-1 bg-surface rounded-xl w-fit border border-border overflow-x-auto">
+        {TABS.map((tspec) => {
+          const Icon = tspec.icon;
+          const active = tspec.key === tab;
+          return (
+            <button
+              key={tspec.key}
+              onClick={() => setTab(tspec.key)}
+              className={cn(
+                "flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap",
+                active
+                  ? "bg-surface-elevated text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon size={14} />
+              {tspec.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Body */}
+      {tab === "overview" && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Stat label={t("profile.totalDemos")} value={aggregates.totalDemos} />
+          <Stat label="Rounds" value={aggregates.totalRounds} />
+          <Stat label="Total time" value={formatDuration(aggregates.totalDuration)} />
+          <Stat
+            label={t("profile.favoriteMap")}
+            value={aggregates.favoriteMap ?? "—"}
+            mono={false}
+          />
+        </div>
+      )}
+
+      {tab === "demos" && (
+        <div className="glass-card rounded-xl overflow-hidden">
+          {completed.length === 0 ? (
+            <EmptyState label={t("common.empty")} />
+          ) : (
+            <table className="w-full rs-table">
+              <thead>
+                <tr>
+                  <th className="text-left">Demo</th>
+                  <th className="text-left">Map</th>
+                  <th className="text-right">Score</th>
+                  <th className="text-right">Rounds</th>
+                  <th className="text-right">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {completed.slice(0, 20).map((d) => (
+                  <tr key={d.id}>
+                    <td>
+                      <Link
+                        href={`/demo/${d.id}/replay`}
+                        className="text-foreground hover:text-primary transition-colors flex items-center gap-1.5"
+                      >
+                        {d.filename}
+                        <ExternalLink size={11} className="opacity-50" />
+                      </Link>
+                    </td>
+                    <td className="text-sm text-muted-foreground">{d.map ?? "—"}</td>
+                    <td className="text-right font-mono-rs text-sm">
+                      {d.score ? d.score.join("–") : "—"}
+                    </td>
+                    <td className="text-right font-mono-rs text-sm text-muted-foreground">
+                      {d.roundCount ?? "—"}
+                    </td>
+                    <td className="text-right text-xs text-muted-foreground">
+                      {d.processedAt
+                        ? new Date(d.processedAt).toLocaleDateString()
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {tab === "achievements" && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <AchievementCard
+            unlocked={aggregates.totalDemos >= 1}
+            label="First demo"
+            description="Upload your first demo"
+            current={Math.min(aggregates.totalDemos, 1)}
+            target={1}
+          />
+          <AchievementCard
+            unlocked={aggregates.totalDemos >= 10}
+            label="Demo collector"
+            description="Analyze 10 demos"
+            current={Math.min(aggregates.totalDemos, 10)}
+            target={10}
+          />
+          <AchievementCard
+            unlocked={aggregates.totalDemos >= 100}
+            label="Centurion"
+            description="Analyze 100 demos"
+            current={Math.min(aggregates.totalDemos, 100)}
+            target={100}
+          />
+          <AchievementCard
+            unlocked={Object.keys(aggregates.mapCounts).length >= 5}
+            label="Globe trotter"
+            description="Demos on 5 different maps"
+            current={Math.min(Object.keys(aggregates.mapCounts).length, 5)}
+            target={5}
+          />
+          <AchievementCard
+            unlocked={aggregates.totalRounds >= 500}
+            label="Round veteran"
+            description="500 rounds analyzed"
+            current={Math.min(aggregates.totalRounds, 500)}
+            target={500}
+          />
+          <AchievementCard
+            unlocked={false}
+            label="Coach mode"
+            description="Save your first review session (Phase 4)"
+            current={0}
+            target={1}
+          />
+        </div>
+      )}
+
+      {tab === "integrations" && (
+        <div className="space-y-4">
+          {/* Steam — when linked, surface the full profile (name,
+              avatar, profile URL, real name, country, steam id) so the
+              user sees everything we have on file. When not linked,
+              show the CTA to start the OpenID flow. */}
+          {steamLinked && user ? (
+            <div className="glass-card rounded-xl p-5">
+              <div className="flex items-start gap-4">
+                <div className="w-16 h-16 rounded-xl bg-primary-dim overflow-hidden flex-shrink-0 flex items-center justify-center">
+                  {user.avatar_url ? (
+                    <Image
+                      src={user.avatar_url}
+                      alt={user.name ?? "Steam avatar"}
+                      width={64}
+                      height={64}
+                      className="w-full h-full object-cover"
+                      unoptimized
+                    />
+                  ) : (
+                    <span className="text-2xl">🎮</span>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-base font-semibold">Steam</span>
+                    <span className="rs-badge bg-win/20 text-win">linked</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                    <ProfileField label="Name" value={user.name} />
+                    <ProfileField label="Steam ID" value={user.steam_id} mono />
+                    {user.steam_realname && (
+                      <ProfileField label="Real name" value={user.steam_realname} />
+                    )}
+                    {user.steam_country && (
+                      <ProfileField label="Country" value={user.steam_country} />
+                    )}
+                  </div>
+                  {user.steam_profile_url && (
+                    <a
+                      href={user.steam_profile_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline mt-1"
+                    >
+                      Open Steam profile
+                      <ExternalLink size={11} />
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="glass-card rounded-xl p-5 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">🎮</span>
+                <div>
+                  <div className="text-sm font-semibold">Steam</div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {t("settings.steamHelp")}
+                  </p>
+                </div>
+              </div>
+              <Link
+                href="/login"
+                className="text-xs font-semibold px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors whitespace-nowrap"
+              >
+                Vincular Steam
+              </Link>
+            </div>
+          )}
+
+          {/* Steam Web API key — player-supplied. Used by the demo
+              extractor to pull match history. We render this regardless
+              of whether the user is Steam-linked, since the key is
+              tied to THEIR Steam account either way (you can have a
+              key without being OpenID-linked here, technically). */}
+          {user && <SteamApiKeyCard hasKey={user.has_steam_api_key} />}
+
+          {/* Faceit / HLTV — still gated on local settings until they
+              get a real integration. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <IntegrationCard
+              name="Faceit"
+              connected={settings.faceitLinked}
+              description={t("settings.faceitHelp")}
+            />
+            <IntegrationCard
+              name="HLTV"
+              connected={!!settings.hltvProfileUrl}
+              description={settings.hltvProfileUrl ?? t("settings.hltvHelp")}
+              href={settings.hltvProfileUrl ?? undefined}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SteamApiKeyCard({ hasKey }: { hasKey: boolean }) {
+  const fetchMe = useAuthStore((s) => s.fetchMe);
+  const [value, setValue] = useState("");
+  const [reveal, setReveal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  const onSave = async () => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setError("Pegá tu API key primero");
+      return;
+    }
+    if (
+      trimmed.length !== 32 ||
+      !/^[0-9A-Fa-f]{32}$/.test(trimmed)
+    ) {
+      setError("La API key debe ser 32 caracteres hex (0-9, A-F)");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.auth.steam.setApiKey(trimmed);
+      await fetchMe();
+      setValue("");
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2500);
+    } catch (err: any) {
+      setError(err?.message ?? "No se pudo guardar la API key");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onClear = async () => {
+    if (!confirm("¿Borrar tu Steam API key guardada?")) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.auth.steam.clearApiKey();
+      await fetchMe();
+    } catch (err: any) {
+      setError(err?.message ?? "No se pudo borrar la API key");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="glass-card rounded-xl p-5 space-y-3">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-lg bg-primary-dim text-primary flex items-center justify-center flex-shrink-0">
+          <KeyRound size={18} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-base font-semibold">Steam Web API Key</span>
+            {hasKey ? (
+              <span className="rs-badge bg-win/20 text-win">configurada</span>
+            ) : (
+              <span className="rs-badge bg-muted/40 text-muted-foreground">
+                no configurada
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Tu API key personal nos deja consultar tu match history y
+            extraer tus demos automáticamente. Generala gratis en{" "}
+            <a
+              href="https://steamcommunity.com/dev/apikey"
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary hover:underline inline-flex items-center gap-1"
+            >
+              steamcommunity.com/dev/apikey
+              <ExternalLink size={10} />
+            </a>{" "}
+            (poné <code className="font-mono-rs text-[11px] bg-surface-elevated px-1 py-0.5 rounded">localhost</code> como dominio para dev). La key se guarda
+            solo en tu cuenta, no la compartimos con nadie.
+          </p>
+        </div>
+      </div>
+
+      {/* Input row: paste + show/hide + save. We treat the input as
+          write-only — never display the existing key, even to its
+          owner. If they need to change it, they paste a new one. */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1">
+          <input
+            type={reveal ? "text" : "password"}
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setError(null);
+            }}
+            placeholder={
+              hasKey
+                ? "Pegá una nueva key para reemplazar la guardada"
+                : "32 caracteres hex (ej. ABCDEF0123456789...)"
+            }
+            disabled={saving}
+            className={cn(
+              "w-full bg-surface border rounded-lg px-3 py-2 pr-9 text-sm font-mono-rs placeholder:text-muted-foreground focus:outline-none transition-colors",
+              error
+                ? "border-loss/60 focus:border-loss"
+                : "border-border focus:border-primary/60",
+            )}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            onClick={() => setReveal((r) => !r)}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            title={reveal ? "Ocultar" : "Mostrar"}
+          >
+            {reveal ? <EyeOff size={14} /> : <Eye size={14} />}
+          </button>
+        </div>
+        <button
+          onClick={onSave}
+          disabled={saving || !value.trim()}
+          className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+        >
+          {saving ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : savedFlash ? (
+            <>
+              <Check size={14} /> Guardado
+            </>
+          ) : (
+            "Guardar key"
+          )}
+        </button>
+        {hasKey && (
+          <button
+            onClick={onClear}
+            disabled={saving}
+            title="Borrar API key"
+            className="p-2 rounded-lg border border-border text-muted-foreground hover:text-loss hover:border-loss/50 transition-colors flex items-center justify-center"
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <p className="text-xs text-loss">{error}</p>
+      )}
+    </div>
+  );
+}
+
+function ProfileField({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string | null | undefined;
+  mono?: boolean;
+}) {
+  if (!value) return null;
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "text-foreground truncate",
+          mono && "font-mono-rs text-xs",
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function Badge({ label }: { label: string }) {
+  return (
+    <span className="rs-badge bg-surface-elevated text-muted-foreground border border-border/50">
+      {label}
+    </span>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  mono = true,
+}: {
+  label: string;
+  value: number | string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="glass-card rounded-xl p-4">
+      <div className="text-[11px] font-mono-rs uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-1 text-2xl font-bold",
+          mono ? "font-mono-rs" : "font-display",
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div className="p-12 text-center text-sm text-muted-foreground">
+      <Film size={24} className="mx-auto opacity-40 mb-2" />
+      {label}
+    </div>
+  );
+}
+
+function AchievementCard({
+  unlocked,
+  label,
+  description,
+  current,
+  target,
+}: {
+  unlocked: boolean;
+  label: string;
+  description: string;
+  current: number;
+  target: number;
+}) {
+  const pct = Math.min(100, (current / target) * 100);
+  return (
+    <div
+      className={cn(
+        "glass-card rounded-xl p-4 transition-all",
+        unlocked ? "border-primary/40" : "opacity-70",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={cn(
+            "w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0",
+            unlocked ? "bg-primary text-primary-foreground" : "bg-surface-elevated text-muted-foreground",
+          )}
+        >
+          <Award size={18} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold">{label}</div>
+          <div className="text-[11px] text-muted-foreground mt-0.5">{description}</div>
+          <div className="mt-2 h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+            <div
+              className={cn("h-full rounded-full transition-all", unlocked ? "bg-primary" : "bg-muted-foreground/40")}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="text-[10px] font-mono-rs text-muted-foreground mt-1">
+            {current} / {target}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IntegrationCard({
+  name,
+  connected,
+  description,
+  href,
+}: {
+  name: string;
+  connected: boolean;
+  description: string;
+  href?: string;
+}) {
+  return (
+    <div className="glass-card rounded-xl p-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold">{name}</span>
+        <span
+          className={cn(
+            "rs-badge",
+            connected ? "bg-win/20 text-win" : "bg-muted/40 text-muted-foreground",
+          )}
+        >
+          {connected ? "linked" : "—"}
+        </span>
+      </div>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-primary hover:underline break-all flex items-center gap-1"
+        >
+          {description}
+          <ExternalLink size={10} />
+        </a>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">{description}</p>
+      )}
+    </div>
+  );
+}

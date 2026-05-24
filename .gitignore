@@ -23,14 +23,35 @@ ENV/
 .tox/
 .pytest_cache/
 
-# Databases
+# Databases — also exclude SQLite WAL + shared-memory sidecars so they
+# don't leak into commits when the API has been running mid-write.
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
-# Demo uploads
+# Demo uploads — never commit raw .dem files, they're 100MB+ each and
+# this repo isn't a demo archive. Also ignore the .rar/.zip the
+# auto-importer may have left in transit.
 apps/api/storage/uploads/*.dem
 apps/api/storage/uploads/*.dem.gz
+apps/api/storage/uploads/*.rar
+apps/api/storage/uploads/*.zip
+
+# Platform-specific binaries auto-downloaded at runtime — NEVER commit
+# the unrar.exe etc., they're fetched per-host on first boot (see
+# services.rar_runtime).
+apps/api/storage/bin/
+apps/api/UnRAR.exe
+apps/api/unrar.exe
+apps/api/unrar
+**/UnRAR.exe
+
+# Local debug / preview scripts (smoke shader iteration prototypes,
+# not part of the shipping source).
+smoke_preview*.py
+smoke_preview*.png
 
 # Environment
 .env
@@ -45,6 +66,12 @@ apps/api/storage/uploads/*.dem.gz
 *.swp
 *.swo
 .DS_Store
+
+# Claude Code local config
+.claude/
+
+# Claude Code local config
+.claude/
 
 # Logs
 *.log

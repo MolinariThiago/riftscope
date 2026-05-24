@@ -3,47 +3,96 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
-  Upload,
-  Film,
-  Users,
   BarChart2,
-  Settings,
   ChevronLeft,
-  Crosshair,
+  Settings,
+  ShieldCheck,
+  Telescope,
+  Trophy,
+  Upload,
+  Users,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+
+import { useT } from "@/lib/i18n/useT";
+import { useAuthStore } from "@/lib/stores/auth";
+import { useUploadPopover } from "@/lib/stores/upload";
 import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/demos", icon: Film, label: "My Demos" },
-  { href: "/demos/upload", icon: Upload, label: "Upload Demo" },
-  { href: "/players", icon: Users, label: "Players" },
-  { href: "/compare", icon: BarChart2, label: "Compare" },
+interface NavSpec {
+  href: string;
+  icon: React.ElementType;
+  labelKey: string;
+}
+
+// "Análisis 2D" (demoReview) now points straight to /demos — clicking it
+// always lands on the demo library, where a first-time welcome card appears
+// if the user hasn't uploaded anything yet.
+//
+// The Upload entry is intentionally NOT a route here anymore — uploading
+// goes through the floating ``UploadDemoPopover`` triggered by the
+// button rendered above the Settings cog. See bottom of this file.
+const navItems: NavSpec[] = [
+  { href: "/demos",         icon: Telescope, labelKey: "nav.demoReview" },
+  { href: "/pro",           icon: Trophy,    labelKey: "nav.proMatches" },
+  { href: "/players",       icon: Users,     labelKey: "nav.players" },
+  { href: "/compare",       icon: BarChart2, labelKey: "nav.compare" },
 ];
 
-const bottomItems = [
-  { href: "/settings", icon: Settings, label: "Settings" },
+const bottomItems: NavSpec[] = [
+  { href: "/settings", icon: Settings, labelKey: "nav.settings" },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  /**
+   * Force the sidebar into compact icon-only mode regardless of user
+   * preference. Used by the 2D replay viewer to claim every available
+   * pixel for the canvas.
+   */
+  forceCollapsed?: boolean;
+}
+
+export function Sidebar({ forceCollapsed = false }: SidebarProps) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  const t = useT();
+  const [userCollapsed, setUserCollapsed] = useState(false);
+  const collapsed = forceCollapsed || userCollapsed;
+  const showPopover = useUploadPopover((s) => s.show);
+  const uploadBtnRef = useRef<HTMLButtonElement | null>(null);
+  const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false);
+
+  const openUpload = () => {
+    const btn = uploadBtnRef.current;
+    if (!btn) {
+      showPopover();
+      return;
+    }
+    const rect = btn.getBoundingClientRect();
+    // Anchor the popover to the RIGHT edge of the button so it
+    // floats out into the main content area instead of overlapping
+    // the sidebar. Vertical alignment matches the button so it feels
+    // attached.
+    showPopover({ x: rect.right, y: rect.top });
+  };
 
   return (
     <aside
       className={cn(
         "relative flex flex-col border-r border-border bg-surface transition-all duration-300",
-        collapsed ? "w-16" : "w-60"
+        collapsed ? "w-16" : "w-60",
       )}
     >
-      {/* Logo */}
       <div className="h-16 flex items-center px-4 border-b border-border flex-shrink-0">
         <Link href="/demos" className="flex items-center gap-3 overflow-hidden">
           <div className="w-8 h-8 flex-shrink-0">
-            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-              <path d="M16 2L28 8V16L16 22L4 16V8L16 2Z" stroke="hsl(185 100% 52%)" strokeWidth="1.5" fill="hsl(185 100% 52% / 0.1)" />
-              <circle cx="16" cy="15" r="3" fill="hsl(185 100% 52%)" />
+            <svg viewBox="0 0 32 32" fill="none" className="w-full h-full">
+              <path
+                d="M16 2L28 8V16L16 22L4 16V8L16 2Z"
+                stroke="hsl(var(--primary))"
+                strokeWidth="1.5"
+                fill="hsl(var(--primary) / 0.1)"
+              />
+              <circle cx="16" cy="15" r="3" fill="hsl(var(--primary))" />
             </svg>
           </div>
           {!collapsed && (
@@ -55,40 +104,75 @@ export function Sidebar() {
         </Link>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 py-4 px-2 space-y-1 overflow-y-auto">
         {navItems.map((item) => (
           <SidebarItem
             key={item.href}
-            {...item}
+            href={item.href}
+            icon={item.icon}
+            label={t(item.labelKey)}
             active={pathname === item.href || pathname.startsWith(item.href + "/")}
             collapsed={collapsed}
           />
         ))}
       </nav>
 
-      {/* Bottom */}
       <div className="py-4 px-2 space-y-1 border-t border-border">
+        {/* Upload — floating popover trigger. Sits ABOVE the settings
+            cog. Not a Link because we never want to navigate away from
+            the current view to upload (especially mid-replay). */}
+        <button
+          ref={uploadBtnRef}
+          onClick={openUpload}
+          title={collapsed ? t("nav.upload") : undefined}
+          className={cn(
+            "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200",
+            "text-muted-foreground hover:text-foreground hover:bg-surface-elevated",
+          )}
+        >
+          <Upload size={16} className="flex-shrink-0" />
+          {!collapsed && (
+            <span className="truncate">{t("nav.upload")}</span>
+          )}
+        </button>
+
+        {/* Admin link — only rendered when the logged-in user is an
+            admin. Sits above Settings since it's a higher-privilege
+            action. Reads ``is_admin`` from the auth store, which is
+            populated by the dashboard layout's fetchMe() call. */}
+        {isAdmin && (
+          <SidebarItem
+            href="/admin"
+            icon={ShieldCheck}
+            label="Admin"
+            active={pathname === "/admin" || pathname.startsWith("/admin/")}
+            collapsed={collapsed}
+          />
+        )}
+
         {bottomItems.map((item) => (
           <SidebarItem
             key={item.href}
-            {...item}
+            href={item.href}
+            icon={item.icon}
+            label={t(item.labelKey)}
             active={pathname === item.href}
             collapsed={collapsed}
           />
         ))}
 
-        {/* Collapse toggle */}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-elevated transition-all duration-200 text-sm"
-        >
-          <ChevronLeft
-            size={16}
-            className={cn("transition-transform duration-300", collapsed && "rotate-180")}
-          />
-          {!collapsed && <span>Collapse</span>}
-        </button>
+        {!forceCollapsed && (
+          <button
+            onClick={() => setUserCollapsed(!userCollapsed)}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-elevated transition-all duration-200 text-sm"
+          >
+            <ChevronLeft
+              size={16}
+              className={cn("transition-transform duration-300", collapsed && "rotate-180")}
+            />
+            {!collapsed && <span>{t("nav.collapse")}</span>}
+          </button>
+        )}
       </div>
     </aside>
   );
@@ -114,7 +198,7 @@ function SidebarItem({
         "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group",
         active
           ? "bg-primary-dim text-primary font-semibold"
-          : "text-muted-foreground hover:text-foreground hover:bg-surface-elevated"
+          : "text-muted-foreground hover:text-foreground hover:bg-surface-elevated",
       )}
       title={collapsed ? label : undefined}
     >

@@ -46,6 +46,85 @@
     --font-mono: 'JetBrains Mono', monospace;
   }
 
+  /* Theme: tactical-dark (default) — same as :root above */
+  html[data-theme="tactical-dark"] {
+    --background: 220 18% 6%;
+    --foreground: 210 20% 92%;
+    --surface: 220 16% 9%;
+    --surface-elevated: 220 14% 12%;
+    --surface-overlay: 220 12% 16%;
+    --border: 220 14% 18%;
+    --border-subtle: 220 14% 13%;
+    --primary: 185 100% 52%;
+    --primary-foreground: 220 18% 6%;
+    --primary-dim: 185 60% 18%;
+    --accent: 270 80% 65%;
+    --muted: 220 14% 14%;
+    --muted-foreground: 215 15% 50%;
+  }
+
+  /* Theme: hltv-classic — orange accent on near-white */
+  html[data-theme="hltv-classic"] {
+    --background: 220 12% 96%;
+    --foreground: 220 18% 12%;
+    --surface: 0 0% 100%;
+    --surface-elevated: 220 12% 98%;
+    --surface-overlay: 220 14% 94%;
+    --border: 220 14% 86%;
+    --border-subtle: 220 14% 92%;
+    --primary: 18 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --primary-dim: 18 100% 92%;
+    --accent: 0 70% 50%;
+    --muted: 220 12% 92%;
+    --muted-foreground: 215 10% 40%;
+    --ct: 215 80% 45%;
+    --tt: 30 90% 50%;
+  }
+
+  /* Theme: minimal-pro — soft light, low chroma */
+  html[data-theme="minimal-pro"] {
+    --background: 220 14% 99%;
+    --foreground: 220 18% 16%;
+    --surface: 0 0% 100%;
+    --surface-elevated: 220 14% 97%;
+    --surface-overlay: 220 14% 95%;
+    --border: 220 14% 90%;
+    --border-subtle: 220 14% 94%;
+    --primary: 220 80% 52%;
+    --primary-foreground: 0 0% 100%;
+    --primary-dim: 220 60% 92%;
+    --accent: 270 60% 60%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 215 10% 45%;
+    --ct: 220 75% 45%;
+    --tt: 30 85% 48%;
+  }
+
+  /* Theme: light — pure light mode */
+  html[data-theme="light"] {
+    --background: 0 0% 100%;
+    --foreground: 220 18% 12%;
+    --surface: 220 16% 98%;
+    --surface-elevated: 220 16% 96%;
+    --surface-overlay: 220 16% 94%;
+    --border: 220 14% 88%;
+    --border-subtle: 220 14% 93%;
+    --primary: 185 80% 38%;
+    --primary-foreground: 0 0% 100%;
+    --primary-dim: 185 60% 90%;
+    --accent: 270 60% 55%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 215 10% 42%;
+    --ct: 213 80% 45%;
+    --tt: 30 85% 45%;
+  }
+
+  /* Density compact — denser spacing across rs-table + glass-card */
+  html[data-density="compact"] body { font-size: 13.5px; }
+  html[data-density="compact"] .rs-table th { padding: 6px 10px; }
+  html[data-density="compact"] .rs-table td { padding: 6px 10px; font-size: 13px; }
+
   * {
     @apply border-border;
     box-sizing: border-box;

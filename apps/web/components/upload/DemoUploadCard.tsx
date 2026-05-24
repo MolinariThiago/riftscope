@@ -31,7 +31,8 @@ export function DemoUploadCard() {
     onDrop,
     accept: { "application/octet-stream": [".dem"] },
     maxFiles: 1,
-    maxSize: 500 * 1024 * 1024,
+    // 2 GB cap — see UploadDemoPopover for rationale.
+    maxSize: 2 * 1024 * 1024 * 1024,
   });
 
   const uploading = upload.isPending;

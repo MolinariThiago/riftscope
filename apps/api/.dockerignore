@@ -1,0 +1,32 @@
+# Dev DB + caches — never ship these to prod images.
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.coverage
+.venv/
+venv/
+
+# Local secrets — env vars come from the platform (Render/Railway).
+.env
+.env.local
+.env.production
+
+# IDE / OS scratch.
+.idea/
+.vscode/
+.DS_Store
+
+# Uploaded demos — production stores in R2, never bake into the image.
+storage/uploads/*
+storage/bin/*
+!storage/uploads/.gitkeep
+!storage/bin/.gitkeep
+
+# Docs / examples that aren't needed at runtime.
+*.md
+.env.example

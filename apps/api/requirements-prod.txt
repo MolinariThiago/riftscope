@@ -1,29 +1,35 @@
-# RIFTSCOPE API - Production dependencies
-# Install on top of requirements.txt only when deploying to production
-# (PostgreSQL + Redis + Celery + demoparser2 + S3/MinIO + pandas)
+# RIFTSCOPE API - Production-only extras
 #
-# These packages are NOT installed in dev because they may break on Windows
-# and require platform-specific Rust/C toolchains (especially demoparser2).
+# Install on top of requirements.txt when deploying to production
+# (PostgreSQL + Redis + Celery + pandas). Versions here are kept
+# CONSISTENT with the ranges in requirements.txt — install order
+# doesn't matter, but the conventional flow is:
 #
-# Install with:  py -m pip install -r requirements-prod.txt
+#   py -m pip install -r requirements.txt
+#   py -m pip install -r requirements-prod.txt
+#
+# Anything that ALSO exists in requirements.txt (boto3, demoparser2,
+# python-jose, bcrypt) is intentionally NOT pinned here a second time
+# — duplicate pins are a recipe for resolver conflicts the day one
+# side drifts. The version in requirements.txt is the single source
+# of truth for those packages.
 
-# PostgreSQL drivers
+# PostgreSQL drivers — only needed when DATABASE_URL points at a
+# real Postgres instance. SQLite dev installs don't need either.
 asyncpg==0.30.0
 psycopg2-binary==2.9.10
 
-# Async task queue
+# Async task queue — required when QUEUE_BACKEND=celery. The inprocess
+# backend in services/queue.py runs without these so they're a
+# production-only ask.
 celery==5.4.0
 redis==5.2.1
 
-# Object storage (S3 / MinIO)
-boto3==1.35.92
-
-# CS2 demo parsing (Rust-backed)
-demoparser2==0.30.0
-
-# Data analysis
+# Data analysis — used by services/insights.py and services/maps.py
+# for heavy aggregations. 2.2.x has wheels for Python 3.12 + 3.13.
 pandas==2.2.3
 
-# Auth (production)
-python-jose[cryptography]==3.3.0
+# Production auth — passlib provides hashlib-backed verification for
+# legacy hashes alongside the bcrypt module already pinned in
+# requirements.txt. New hashes are produced by bcrypt directly.
 passlib[bcrypt]==1.7.4

@@ -61,6 +61,7 @@ module.exports = {
       backgroundImage: {
         "grid-pattern": "var(--grid-pattern)",
         "glow-primary": "radial-gradient(circle at 50% 0%, hsl(var(--primary) / 0.15) 0%, transparent 60%)",
+        "gradient-radial": "radial-gradient(circle at center, var(--tw-gradient-stops))",
       },
       animation: {
         "fade-in": "fadeIn 0.4s ease forwards",

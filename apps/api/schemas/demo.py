@@ -1,7 +1,7 @@
 """
-Pydantic v2 schemas for demo-related API responses.
+Pydantic v2 schemas for demo / map API responses.
 
-These mirror `apps/web/types/demo.ts` so the contract stays in sync.
+These mirror ``apps/web/types/demo.ts`` so the contract stays in sync.
 """
 
 from __future__ import annotations
@@ -58,6 +58,11 @@ class TimelineRoundMeta(BaseModel):
     duration_seconds: float = Field(..., alias="durationSeconds")
     frame_count: int = Field(..., alias="frameCount")
     event_count: int = Field(..., alias="eventCount")
+    # Bounds of the actual play period inside the full timeline
+    # (which now includes freeze + post). Frontend uses these to
+    # clamp playback when the user toggles off the freeze/post view.
+    play_start_t: float = Field(0.0, alias="playStartT")
+    play_end_t: float = Field(0.0, alias="playEndT")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -90,5 +95,67 @@ class RoundTimelineResponse(BaseModel):
     duration_seconds: float = Field(..., alias="durationSeconds")
     frames: list[dict[str, Any]]
     events: list[dict[str, Any]]
+    loadouts: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Bounds of the actual play period inside the full extended
+    # timeline (freeze + play + post). Frontend uses these to clamp
+    # playback when the user toggles off the freeze/post view.
+    play_start_t: float = Field(0.0, alias="playStartT")
+    play_end_t: float = Field(0.0, alias="playEndT")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+# ---------------------------------------------------------------------------
+# Map metadata (Phase 3A)
+# ---------------------------------------------------------------------------
+
+
+class MapCalloutResponse(BaseModel):
+    name: str
+    x: float
+    y: float
+    radius: float
+
+
+class DemoInsightsResponse(BaseModel):
+    """Pre-computed insights payload — served from cache, never live."""
+
+    engine_version: str = Field(..., alias="engineVersion")
+    summary: dict[str, Any]
+    rounds: list[dict[str, Any]]
+    players: list[dict[str, Any]]
+    heatmap: dict[str, Any]
+    computed_at: Optional[datetime] = Field(None, alias="computedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MapMetadataResponse(BaseModel):
+    name: str
+    display_name: str = Field(..., alias="displayName")
+
+    # Radar projection (Valve overview <map>.txt constants)
+    pos_x: float = Field(..., alias="posX")
+    pos_y: float = Field(..., alias="posY")
+    scale: float
+    radar_size: int = Field(..., alias="radarSize")
+
+    # Asset URLs
+    radar_url: str = Field(..., alias="radarUrl")
+    radar_url_lower: Optional[str] = Field(None, alias="radarUrlLower")
+    lower_threshold_z: Optional[float] = Field(None, alias="lowerThresholdZ")
+
+    # World bounds (derived)
+    world_min_x: float = Field(..., alias="worldMinX")
+    world_max_x: float = Field(..., alias="worldMaxX")
+    world_min_y: float = Field(..., alias="worldMinY")
+    world_max_y: float = Field(..., alias="worldMaxY")
+
+    # Anchors (world coords)
+    site_a: list[float] = Field(..., alias="siteA")
+    site_b: list[float] = Field(..., alias="siteB")
+    spawn_ct: list[float] = Field(..., alias="spawnCt")
+    spawn_tt: list[float] = Field(..., alias="spawnTt")
+    callouts: list[MapCalloutResponse]
 
     model_config = ConfigDict(populate_by_name=True)
