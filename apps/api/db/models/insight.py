@@ -25,8 +25,6 @@ proxies) are stored separately so the frontend can render leaderboards
 without scanning insights.
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Column,
     DateTime,
@@ -36,6 +34,7 @@ from sqlalchemy import (
     String,
 )
 
+from core.utc import utcnow_naive
 from db.database import Base
 
 
@@ -67,4 +66,4 @@ class DemoInsight(Base):
     # bounds — saves the frontend from scanning all kills every render.
     heatmap = Column(JSON, nullable=False, default=dict)
 
-    computed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    computed_at = Column(DateTime, default=utcnow_naive, nullable=False)

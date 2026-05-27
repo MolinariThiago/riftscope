@@ -14,7 +14,7 @@ reflects actual signup / upload activity.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.settings import get_settings
+from core.utc import utcnow_naive
 from db.database import get_db
 from db.models.demo import Demo
 from db.models.user import User
@@ -104,7 +105,7 @@ def get_growth(
     _admin: User = Depends(require_admin),
 ):
     days = max(7, min(180, int(days)))
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = utcnow_naive() - timedelta(days=days)
 
     granularity = "week" if days > 14 else "day"
 

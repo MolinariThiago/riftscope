@@ -21,10 +21,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.utc import utcnow_naive
 from db.database import SessionLocal
 from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound
 from db.models.insight import DemoInsight
@@ -316,7 +316,7 @@ def _persist_insights(demo_id: int, analysis: dict[str, Any]) -> None:
             existing.rounds = payload.get("rounds", [])
             existing.players = payload.get("players", [])
             existing.heatmap = payload.get("heatmap", {})
-            existing.computed_at = datetime.utcnow()
+            existing.computed_at = utcnow_naive()
         else:
             db.add(DemoInsight(
                 demo_id=demo_id,
@@ -419,7 +419,7 @@ async def process_demo(demo_id: int, file_path: str) -> None:
             demo_id,
             status="completed",
             processing_progress=100,
-            processed_at=datetime.utcnow(),
+            processed_at=utcnow_naive(),
             map_name=meta["map"],
             tick_rate=meta["tickrate"],
             duration_seconds=meta["durationSeconds"],

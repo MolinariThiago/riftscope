@@ -41,6 +41,7 @@ from jose import jwt
 from sqlalchemy.orm import Session
 
 from core.settings import get_settings
+from core.utc import utcnow_naive
 from db.database import get_db
 from db.models.user import User
 from routers.deps import get_current_user, get_current_user_optional
@@ -60,7 +61,7 @@ STEAM_ID_RE = re.compile(r"https?://steamcommunity\.com/openid/id/(\d+)")
 # ---------------------------------------------------------------------------
 def _issue_token(user: User) -> str:
     settings = get_settings()
-    expires = datetime.utcnow() + timedelta(
+    expires = utcnow_naive() + timedelta(
         minutes=settings.access_token_expire_minutes
     )
     payload = {"sub": str(user.id), "exp": expires}
@@ -489,7 +490,7 @@ async def steam_callback(
             user.steam_realname = profile["realname"]
         if profile.get("loccountrycode"):
             user.steam_country = profile["loccountrycode"]
-    user.last_login = datetime.utcnow()
+    user.last_login = utcnow_naive()
     db.commit()
     db.refresh(user)
 

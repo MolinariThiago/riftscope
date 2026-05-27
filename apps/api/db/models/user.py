@@ -19,11 +19,11 @@ The schema covers three responsibilities:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, String
 from sqlalchemy.orm import relationship
 
+from core.utc import utcnow_naive
 from db.database import Base
 
 
@@ -77,7 +77,7 @@ class User(Base):
 
     # Timestamps.
     created_at = Column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True
+        DateTime, default=utcnow_naive, nullable=False, index=True
     )
     last_login = Column(DateTime, nullable=True)
 

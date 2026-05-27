@@ -18,8 +18,6 @@ The JSON blob is still kept on ``Demo.analysis_data`` because the per-frame
 normalized tables sit alongside it for fast aggregate queries.
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Boolean,
     Column,
@@ -33,6 +31,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
+from core.utc import utcnow_naive
 from db.database import Base
 
 
@@ -46,7 +45,7 @@ class Demo(Base):
 
     # Lifecycle
     status = Column(String, default="uploaded", nullable=False, index=True)
-    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    uploaded_at = Column(DateTime, default=utcnow_naive, nullable=False)
     processed_at = Column(DateTime, nullable=True)
     processing_progress = Column(Integer, default=0, nullable=False)  # 0..100
     error_message = Column(Text, nullable=True)

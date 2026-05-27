@@ -9,8 +9,6 @@ Separated from Demo because:
 - A pro match can later be linked to a parsed Demo via ``demo_id``.
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Column,
     DateTime,
@@ -20,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
+from core.utc import utcnow_naive
 from db.database import Base
 
 
@@ -56,7 +55,7 @@ class ProMatch(Base):
     tier = Column(String, nullable=True, index=True)
 
     played_at = Column(DateTime, nullable=True, index=True)
-    indexed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    indexed_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     demo_url = Column(String, nullable=True)
 

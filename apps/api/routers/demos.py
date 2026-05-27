@@ -7,12 +7,12 @@ in :mod:`services.storage` and :mod:`services.queue`, so flipping the
 startup without touching this module.
 """
 
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from core.utc import utcnow_naive
 from db.database import get_db
 from db.models.demo import Demo
 from db.models.insight import DemoInsight
@@ -124,7 +124,7 @@ async def upload_demo(
         id=str(demo.id),
         filename=demo.filename,
         status="queued",
-        uploadedAt=demo.uploaded_at or datetime.utcnow(),
+        uploadedAt=demo.uploaded_at or utcnow_naive(),
     )
 
 
