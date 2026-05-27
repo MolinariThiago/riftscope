@@ -896,7 +896,14 @@ export function PixiMapCanvas({
           // Matches the visible behaviour in CS2.cam reference clips
           // where smokes thrown over molotovs cancel the fire.
           // ================================================================
-          const isIncendiary = e.team === "ct";
+          // Prefer the parser-supplied weaponType (derived from the actual
+          // grenade entity in the demo file) over team-based inference —
+          // team orientation detection can be off on some demos, which
+          // would swap the CT incendiary and TT molotov visuals.
+          const isIncendiary =
+            e.weaponType !== undefined
+              ? e.weaponType === "incgrenade"
+              : e.team === "ct";
           const FIRE_LIFETIME = isIncendiary ? 5.5 : 7.0;
           const SPREAD_DURATION = 0.8;
           const expires = e.expiresAt ?? (detonateT + FIRE_LIFETIME);
@@ -993,31 +1000,67 @@ export function PixiMapCanvas({
             // the bounding to ~110 wu, matching CS2's real flame
             // extent. T molotov sits a touch wider than CT
             // incendiary in the actual game so we mirror that.
-            const patchR = projectScalar(isIncendiary ? 40 : 45);
-            // Team-keyed flat colour. CT incendiary leans slightly
-            // brighter / more orange; T molotov a touch deeper.
-            const flatOrange = isIncendiary ? 0xc06824 : 0xb44818;
+            // Per-patch render radius in world units.
+            // CS2's real fire extent is ~120-130 wu for TT molotov and
+            // ~100-110 wu for CT incendiary. The synthetic patches are
+            // spread up to 62 wu from centre (backend augmentation);
+            // patchR adds on top of that, giving a total visual extent
+            // of ~patchR + 62. Keeping patchR at 38/42 lands us at
+            // 100/104 wu — inside the real-game range and not bloated.
+            const patchR = projectScalar(isIncendiary ? 38 : 42);
+            // Colour palette per grenade type.
+            // CT incendiary: slightly brighter, cleaner orange.
+            // T molotov:     deeper, more reddish orange.
+            const colBody = isIncendiary ? 0xd47020 : 0xc03810;
+            const colCore = isIncendiary ? 0xf09030 : 0xef6820;
+            const colHot  = 0xffe060;
 
             for (const patch of e.patches) {
               const patchAge = currentTime - patch.t;
               if (patchAge < 0) continue;
               if (patchAge > PATCH_LIFETIME) continue;
-              // Each patch fades over its last 1.5 s of life so the
-              // molotov dies as a rolling extinguish wave matching
-              // the order patches appeared, not all at once.
+
+              // ── Expansion ──────────────────────────────────────────
+              // Each patch grows from 0 → full radius over 0.60 s
+              // (easeOutQuart). The backend now orders synthetic patches
+              // by distance from centre (inner first), so the per-patch
+              // expansion timings combine with patch timestamps to
+              // produce a visible "fire spreading outward from impact"
+              // effect that mirrors real CS2 flame behaviour.
+              const expandT      = Math.min(1, patchAge / 0.60);
+              const expandFactor = 1 - Math.pow(1 - expandT, 4);
+              const curR         = patchR * expandFactor;
+              if (curR < 0.5) continue;
+
+              // ── End-of-life fade ────────────────────────────────────
               const patchFade =
                 patchAge > PATCH_LIFETIME - 1.5
-                  ? Math.max(
-                      0,
-                      1 - (patchAge - (PATCH_LIFETIME - 1.5)) / 1.5,
-                    )
+                  ? Math.max(0, 1 - (patchAge - (PATCH_LIFETIME - 1.5)) / 1.5)
                   : 1;
-              const alpha = patchFade * effectiveBurnout;
-              if (alpha < 0.02) continue;
+              const baseAlpha = patchFade * effectiveBurnout;
+              if (baseAlpha < 0.02) continue;
+
+              // ── Per-patch flicker ───────────────────────────────────
+              // Keyed on world position + time so adjacent patches are
+              // out of phase — the fire "breathes" organically.
+              const flicker =
+                0.82 + Math.sin(currentTime * 10.7 + patch.x * 0.08 + patch.y * 0.11) * 0.18;
+
               const pp = project(patch.x, patch.y);
+
+              // Layer 1 — main fire body (no external halo; the overlap
+              //           of adjacent patches provides density naturally).
               patchG
-                .circle(pp.cx, pp.cy, patchR)
-                .fill({ color: flatOrange, alpha: alpha * 0.85 });
+                .circle(pp.cx, pp.cy, curR)
+                .fill({ color: colBody, alpha: baseAlpha * 0.90 * flicker });
+              // Layer 2 — bright inner core.
+              patchG
+                .circle(pp.cx, pp.cy, curR * 0.58)
+                .fill({ color: colCore, alpha: baseAlpha * 0.80 * flicker });
+              // Layer 3 — hot yellow-white tip.
+              patchG
+                .circle(pp.cx, pp.cy, curR * 0.25)
+                .fill({ color: colHot, alpha: baseAlpha * 0.60 * flicker });
             }
             // Skip the shader render — the patches ARE the visual.
             continue;
@@ -1393,7 +1436,15 @@ export function PixiMapCanvas({
         else if (e.subtype === "flash") nadeUtilityKey = "flashbang";
         else if (e.subtype === "he") nadeUtilityKey = "hegrenade";
         else if (e.subtype === "molotov") {
-          nadeUtilityKey = e.team === "ct" ? "incgrenade" : "molotov";
+          // Use the parser-supplied weaponType when available — it is
+          // read directly from the demo file's grenade entity and is
+          // immune to team-orientation detection errors that can swap
+          // CT incendiary and TT molotov.  Fall back to the team field
+          // for older demos / stub parser events that lack weaponType.
+          nadeUtilityKey =
+            e.weaponType !== undefined
+              ? e.weaponType                          // "incgrenade" | "molotov"
+              : e.team === "ct" ? "incgrenade" : "molotov";
         }
 
         let nadeHeadSprite = nadeHeadSpritePoolRef.current.get(trajKey);
@@ -2985,7 +3036,7 @@ const wallMaskCache: Map<string, Texture> = new Map();
 const wallMaskLoading: Map<string, Promise<Texture | null>> = new Map();
 // Cache version bump — increment this any time the algorithm changes
 // so localStorage / texture caches invalidate cleanly across users.
-const WALL_MASK_VERSION = "v7-hsv-morph";
+const WALL_MASK_VERSION = "v9-door-alpha";
 
 /**
  * Derive the pre-generated walkable mask URL from a radar URL.
@@ -3181,6 +3232,99 @@ async function createWallMask(radarUrl: string): Promise<Texture | null> {
       }
 
       // ============================================================
+      // Step 3.5 — WIDE MORPHOLOGICAL CLOSE (door-gap bridging)
+      //
+      // The standard 1-px close in step 3 cannot bridge doorframe
+      // gaps (~10-20 px on a 1024-px radar image, matching CS2's
+      // typical ~80-100 wu door width).  This pass uses a separable
+      // box close with DOOR_R = 10 px to fill those thin dark strips
+      // between walkable rooms without touching the core algorithm.
+      //
+      //   dilate(R)  — expands walkable areas, bridging the gap
+      //   erode(R)   — restores large wall volumes; thin bridges that
+      //                now connect two walkable regions REMAIN open
+      //
+      // The result is unioned with `closed` so this step is strictly
+      // ADDITIVE — it never removes walkable pixels already accepted
+      // by the earlier steps.  It runs BEFORE step 4 so newly-bridged
+      // rooms form one large connected component and are not discarded
+      // by the minimum-size filter.
+      // ============================================================
+      const DOOR_R = 15;
+
+      // ── Separable box dilation ──────────────────────────────────
+      // Horizontal pass: pixel x is walkable if ANY pixel in [x-R, x+R]
+      // (same row) was walkable in `closed`.
+      const _ddH = new Uint8Array(N);
+      for (let y = 0; y < h; y++) {
+        const base = y * w;
+        const ps = new Int32Array(w + 1);
+        for (let x = 0; x < w; x++) ps[x + 1] = ps[x] + closed[base + x];
+        for (let x = 0; x < w; x++) {
+          const lo = x > DOOR_R ? x - DOOR_R : 0;
+          const hi = x + DOOR_R < w ? x + DOOR_R : w - 1;
+          if (ps[hi + 1] - ps[lo] > 0) _ddH[base + x] = 1;
+        }
+      }
+      // Vertical pass: pixel y is walkable if ANY pixel in [y-R, y+R]
+      // (same column) was walkable after the horizontal pass.
+      const _ddV = new Uint8Array(N);
+      for (let x = 0; x < w; x++) {
+        const ps = new Int32Array(h + 1);
+        for (let y = 0; y < h; y++) ps[y + 1] = ps[y] + _ddH[y * w + x];
+        for (let y = 0; y < h; y++) {
+          const lo = y > DOOR_R ? y - DOOR_R : 0;
+          const hi = y + DOOR_R < h ? y + DOOR_R : h - 1;
+          if (ps[hi + 1] - ps[lo] > 0) _ddV[y * w + x] = 1;
+        }
+      }
+
+      // ── Separable box erosion ───────────────────────────────────
+      // Horizontal pass: pixel x survives only when ALL pixels in
+      // [x-R, x+R] (same row) are walkable in the dilated buffer.
+      const _deH = new Uint8Array(N);
+      for (let y = 0; y < h; y++) {
+        const base = y * w;
+        const ps = new Int32Array(w + 1);
+        for (let x = 0; x < w; x++) ps[x + 1] = ps[x] + _ddV[base + x];
+        for (let x = 0; x < w; x++) {
+          if (_ddV[base + x] === 0) continue;
+          const lo = x > DOOR_R ? x - DOOR_R : 0;
+          const hi = x + DOOR_R < w ? x + DOOR_R : w - 1;
+          if (ps[hi + 1] - ps[lo] === hi - lo + 1) _deH[base + x] = 1;
+        }
+      }
+      // Vertical pass: pixel y survives only when ALL pixels in
+      // [y-R, y+R] (same column) are walkable after horizontal erosion.
+      // Stored into `doorClosed`; then unioned with `closed`.
+      const doorClosed = new Uint8Array(N);
+      for (let x = 0; x < w; x++) {
+        const ps = new Int32Array(h + 1);
+        for (let y = 0; y < h; y++) ps[y + 1] = ps[y] + _deH[y * w + x];
+        for (let y = 0; y < h; y++) {
+          if (_deH[y * w + x] === 0) continue;
+          const lo = y > DOOR_R ? y - DOOR_R : 0;
+          const hi = y + DOOR_R < h ? y + DOOR_R : h - 1;
+          if (ps[hi + 1] - ps[lo] === hi - lo + 1) doorClosed[y * w + x] = 1;
+        }
+      }
+      // Track which pixels were OPENED by this step — those are the
+      // door / archway gap pixels.  They were walls in `closed` and
+      // are now walkable in `doorClosed`.  We override their final
+      // alpha in step 6 so the smoke shader treats them as fully
+      // walkable (the distance-transform falloff would otherwise
+      // make them mostly opaque since they sit right next to walls).
+      const isDoorPixel = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        if (doorClosed[i] === 1 && closed[i] === 0) isDoorPixel[i] = 1;
+      }
+      // Union — keep every walkable pixel from step 3 and add the
+      // newly-bridged door pixels from the wide close.
+      for (let i = 0; i < N; i++) {
+        if (closed[i] === 1) doorClosed[i] = 1;
+      }
+
+      // ============================================================
       // Step 4 — CONNECTED-COMPONENT FILTERING
       //
       // The cleaned binary mask still has small floating islands
@@ -3190,6 +3334,10 @@ async function createWallMask(radarUrl: string): Promise<Texture | null> {
       // walkable count. The main playable area is always orders of
       // magnitude bigger than any marker so this drops noise without
       // killing legitimate disconnected regions like Anubis bridge.
+      //
+      // Uses `doorClosed` (not `closed`) so that rooms bridged by
+      // the door-gap pass in step 3.5 are treated as one connected
+      // component and are not discarded by the size filter.
       // ============================================================
       const MIN_COMPONENT_FRAC = 0.005;
       const minComponent = Math.max(50, Math.floor(walkCount * MIN_COMPONENT_FRAC));
@@ -3198,7 +3346,7 @@ async function createWallMask(radarUrl: string): Promise<Texture | null> {
       const componentSizes: number[] = [0]; // component 0 is the "wall" sentinel
       let nextLabel = 1;
       for (let i = 0; i < N; i++) {
-        if (closed[i] !== 1 || labels[i] !== 0) continue;
+        if (doorClosed[i] !== 1 || labels[i] !== 0) continue;
         // Start a new flood-fill from this pixel.
         labels[i] = nextLabel;
         stack.length = 0;
@@ -3209,19 +3357,19 @@ async function createWallMask(radarUrl: string): Promise<Texture | null> {
           size++;
           const x = j % w;
           const y = (j - x) / w;
-          if (x > 0 && closed[j - 1] === 1 && labels[j - 1] === 0) {
+          if (x > 0 && doorClosed[j - 1] === 1 && labels[j - 1] === 0) {
             labels[j - 1] = nextLabel;
             stack.push(j - 1);
           }
-          if (x < w - 1 && closed[j + 1] === 1 && labels[j + 1] === 0) {
+          if (x < w - 1 && doorClosed[j + 1] === 1 && labels[j + 1] === 0) {
             labels[j + 1] = nextLabel;
             stack.push(j + 1);
           }
-          if (y > 0 && closed[j - w] === 1 && labels[j - w] === 0) {
+          if (y > 0 && doorClosed[j - w] === 1 && labels[j - w] === 0) {
             labels[j - w] = nextLabel;
             stack.push(j - w);
           }
-          if (y < h - 1 && closed[j + w] === 1 && labels[j + w] === 0) {
+          if (y < h - 1 && doorClosed[j + w] === 1 && labels[j + w] === 0) {
             labels[j + w] = nextLabel;
             stack.push(j + w);
           }
@@ -3310,11 +3458,23 @@ async function createWallMask(radarUrl: string): Promise<Texture | null> {
           px[p + 3] = 0;
           continue;
         }
-        const t = Math.max(0, Math.min(1, dist[i] / FALLOFF_PX));
-        const s = t * t * (3 - 2 * t);
         px[p] = 255;
         px[p + 1] = 255;
         px[p + 2] = 255;
+        if (isDoorPixel[i] === 1) {
+          // Door / archway pixel opened by step 3.5.  Its chamfer
+          // distance to the nearest wall is small (1-3 px) because
+          // it sits right at the doorframe, which would clamp the
+          // alpha to ~0.1-0.3 — well below the smoke shader's
+          // smoothstep(0.05, 0.50) cutoff, leaving the door visually
+          // blocked.  Force full alpha so the smoke / molotov shader
+          // treats the door as fully walkable and lets the cluster
+          // pass through.
+          px[p + 3] = 255;
+          continue;
+        }
+        const t = Math.max(0, Math.min(1, dist[i] / FALLOFF_PX));
+        const s = t * t * (3 - 2 * t);
         px[p + 3] = Math.round(s * 255);
       }
       ctx.putImageData(data, 0, 0);

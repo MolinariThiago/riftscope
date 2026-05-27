@@ -248,6 +248,13 @@ export interface TimelineEvent {
    * before the patch extraction landed).
    */
   patches?: { x: number; y: number; t: number }[];
+  /**
+   * Actual grenade weapon type resolved from the demo file.
+   * `"incgrenade"` = CT incendiary, `"molotov"` = T molotov.
+   * Present on all molotov/incendiary events parsed by the real parser.
+   * Falls back to team-based inference when absent (older demos / stub parser).
+   */
+  weaponType?: "incgrenade" | "molotov";
 }
 
 export interface RoundTimeline {

@@ -1592,11 +1592,40 @@ class RealDemoParser:
                 else:
                     throw_rel_t = max(0.0, detonate_rel_t - 0.7)
 
+                # ---- Actual weapon type (CT incendiary vs TT molotov) --------
+                # Derived from the real grenade_type column in parse_grenades()
+                # via weapon_type_by_key, which was populated from the demo file
+                # itself — more reliable than team_num → side mapping (which can
+                # be tripped by the halftime orientation-detection heuristic).
+                #
+                # Vocabulary in the wild: "cmolotovprojectile", "incgrenade",
+                # "weapon_incgrenade", "incendiarygrenade", etc.  We look for any
+                # of the canonical incendiary substrings; everything else is the
+                # T-side molotov.
+                actual_gtype = ""
+                if best_key is not None:
+                    actual_gtype = weapon_type_by_key.get(best_key, "")
+                _inc_keywords = ("incendia", "incgren", "firebomb", "inc_gr")
+                if actual_gtype:
+                    is_ct_incendiary = any(
+                        s in actual_gtype.lower() for s in _inc_keywords
+                    )
+                else:
+                    # No matched projectile — fall back to team as proxy.
+                    is_ct_incendiary = team == "ct"
+                weapon_type = "incgrenade" if is_ct_incendiary else "molotov"
+
                 # ---- Synthetic spread augmentation ----
                 # demoparser2's inferno_startburn often emits only 1-2
                 # patches per inferno entity. Synthesise extras around
                 # the ignition point so the visual reads as a spreading
                 # fire instead of a single static disc.
+                #
+                # Patches are ordered by DISTANCE from the ignition centre
+                # (inner patches first, outer patches last). This means the
+                # timestamp increases with radius, so the rendered fire
+                # visibly spreads outward from the impact point — matching
+                # the real CS2 flame-expansion behaviour.
                 TARGET_PATCH_COUNT = 14
                 if len(patches_rel) < TARGET_PATCH_COUNT:
                     import math
@@ -1605,15 +1634,28 @@ class RealDemoParser:
                     rng = _random_mod.Random(seed_str)
                     base = patches_rel[0]
                     needed = TARGET_PATCH_COUNT - len(patches_rel)
+                    # Generate candidate patches with their distances, then sort
+                    # so inner patches receive earlier timestamps.
+                    new_patches: list[dict] = []
                     for i in range(needed):
                         base_angle = (i / needed) * 6.28318530718
                         jitter_angle = (rng.random() - 0.5) * 0.9
                         angle = base_angle + jitter_angle
-                        dist = 12.0 + rng.random() * 53.0
+                        # Distance grows with index so the circle is filled
+                        # from inside out; a small random jitter keeps it
+                        # irregular rather than perfectly ring-shaped.
+                        min_d, max_d = 10.0, 62.0
+                        dist = min_d + (max_d - min_d) * (i / needed) + (rng.random() - 0.5) * 8.0
+                        dist = max(min_d, min(max_d, dist))
                         sx = int(base["x"] + math.cos(angle) * dist)
                         sy = int(base["y"] + math.sin(angle) * dist)
-                        st = round(base["t"] + 0.06 + (i / needed) * 0.40, 2)
-                        patches_rel.append({"x": sx, "y": sy, "t": st})
+                        new_patches.append({"x": sx, "y": sy, "dist": dist})
+                    # Sort inner → outer so the fire "expands" correctly.
+                    new_patches.sort(key=lambda p: p["dist"])
+                    # Spread timestamps from 0.06 s to 0.55 s after first ignition.
+                    for i, p in enumerate(new_patches):
+                        st = round(base["t"] + 0.06 + (i / needed) * 0.55, 2)
+                        patches_rel.append({"x": p["x"], "y": p["y"], "t": st})
                     patches_rel.sort(key=lambda p: p["t"])
                     last_patch_rel_t = max(last_patch_rel_t, patches_rel[-1]["t"])
 
@@ -1624,6 +1666,10 @@ class RealDemoParser:
                     "subtype": "molotov",
                     "player": sid,
                     "team": team,
+                    # Canonical grenade-type key — used by the frontend to
+                    # show the correct icon (incgrenade vs molotov) regardless
+                    # of team orientation detection accuracy.
+                    "weaponType": weapon_type,
                     "x": landing_x,
                     "y": landing_y,
                     "throwerX": _safe_int(thrower_pos[0]) if thrower_pos else None,
