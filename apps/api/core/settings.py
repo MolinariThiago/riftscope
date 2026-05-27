@@ -12,8 +12,14 @@ factories in services/* read these flags at startup.
 from functools import lru_cache
 from typing import List, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Default SECRET_KEY value — published in source.  Anything else means
+# the operator did override it via env.  Kept as a module-level
+# constant so the prod-guard validator below and unit tests share
+# the same definition.
+_DEV_SECRET_PLACEHOLDER = "dev-secret-change-me-in-prod"
 
 
 class Settings(BaseSettings):
@@ -46,8 +52,12 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # DEV default — MUST be overridden in production via env. The token
     # cookie is httpOnly so XSS can't read it; the secret only needs to
-    # be unguessable, not user-presentable.
-    secret_key: str = "dev-secret-change-me-in-prod"
+    # be unguessable, not user-presentable.  See the post-init validator
+    # below: leaving this at the placeholder when ``environment`` is
+    # anything other than ``development`` raises at startup so a
+    # mis-configured deploy fails loud instead of silently signing
+    # JWTs with a public string.
+    secret_key: str = _DEV_SECRET_PLACEHOLDER
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
 
@@ -93,6 +103,46 @@ class Settings(BaseSettings):
     s3_access_key: str = ""
     s3_secret_key: str = ""
     s3_region: str = "us-east-1"
+
+    # ------------------------------------------------------------------
+    # Production safety net — refuse to boot with insecure defaults.
+    # ------------------------------------------------------------------
+    @model_validator(mode="after")
+    def _enforce_prod_safety(self) -> "Settings":
+        """Fail fast when an unsafe configuration is detected outside dev.
+
+        Catches the most common mis-deploy where ``SECRET_KEY`` was
+        forgotten in Railway / docker-compose: every JWT would be signed
+        with the public placeholder, letting anyone forge tokens for
+        any user.  Better to crash on boot than to ship a forged-token
+        backdoor.
+        """
+        if self.environment != "development":
+            if self.secret_key == _DEV_SECRET_PLACEHOLDER:
+                raise RuntimeError(
+                    "SECRET_KEY is still the development placeholder. "
+                    "Set a strong random value (>=32 chars) via the "
+                    "SECRET_KEY env var before starting the API in "
+                    f"environment={self.environment!r}."
+                )
+            # Cookie + Steam OpenID flow assumes the configured origins
+            # are real public URLs.  If they're still localhost the
+            # frontend on Vercel can't talk to us and Steam refuses the
+            # return_to assertion.
+            if "localhost" in self.frontend_origin or "127.0.0.1" in self.frontend_origin:
+                raise RuntimeError(
+                    "FRONTEND_ORIGIN still points at localhost in "
+                    f"environment={self.environment!r}. Set it to the "
+                    "public Vercel URL (or wherever the frontend lives)."
+                )
+            if "localhost" in self.steam_realm or "127.0.0.1" in self.steam_realm:
+                raise RuntimeError(
+                    "STEAM_REALM still points at localhost in "
+                    f"environment={self.environment!r}. Set it to the "
+                    "public frontend origin so Steam OpenID validates "
+                    "the return_to URL."
+                )
+        return self
 
 
 @lru_cache
