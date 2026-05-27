@@ -39,17 +39,33 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const me = await api.auth.me();
       set({ user: me, isLoading: false });
-    } catch {
-      // 401 / 404 / network — treat as logged out. The admin gate
-      // shows its "ACCESO DENEGADO" screen in this state.
+    } catch (err) {
+      // 401 is the normal anonymous path — the route guard upstream
+      // handles it. Anything else (5xx, network, parse failure) is a
+      // real production signal so we surface it via console.error.
+      // Debug/info logs were removed elsewhere in this audit; this
+      // one stays because it is the only breadcrumb a prod operator
+      // has when ``/auth/me`` mysteriously fails.
+      const status = (err as { status?: number } | null)?.status;
+      if (status !== 401) {
+        // eslint-disable-next-line no-console
+        console.error("[auth] fetchMe failed:", err);
+      }
       set({ user: null, isLoading: false });
     }
   },
   logout: async () => {
     try {
       await api.auth.logout();
-    } catch {
-      // Already-expired cookie is fine — local state is still reset.
+    } catch (err) {
+      // 401 (already-expired cookie) is fine — local state is still
+      // reset below.  Anything else means the server actually failed
+      // to clear the session; log it so we notice in prod.
+      const status = (err as { status?: number } | null)?.status;
+      if (status !== 401) {
+        // eslint-disable-next-line no-console
+        console.error("[auth] logout failed:", err);
+      }
     }
     set({ user: null, isLoading: false });
   },
