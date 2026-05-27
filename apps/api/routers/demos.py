@@ -17,7 +17,7 @@ from db.database import get_db
 from db.models.demo import Demo
 from db.models.insight import DemoInsight
 from db.models.user import User
-from routers.deps import get_current_user, get_current_user_optional
+from routers.deps import get_current_user
 from schemas.demo import (
     DemoAnalysisResponse,
     DemoInsightsResponse,
@@ -36,11 +36,49 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# List
+# Access control helper — used by every read/write endpoint below.
+#
+# Visibility model (decided pre-prod): demos are PRIVATE to their owner.
+# Admins see everything. Legacy demos with ``user_id IS NULL`` were
+# uploaded before auth was enforced — they're treated as admin-only so
+# the operator can still recover / delete them, but regular users can't
+# enumerate or read them.
+# ---------------------------------------------------------------------------
+def _check_demo_access(demo: Demo, user: User) -> None:
+    """Raise 403 unless ``user`` can read/modify ``demo``.
+
+    Rules:
+      - Admins bypass every check.
+      - Owners (``demo.user_id == user.id``) can read + modify their own.
+      - Anyone else — including the orphan-demo case (``user_id IS NULL``,
+        legacy uploads) — gets 403. Returning 404 would also be valid but
+        revealing "exists but you can't see it" is preferable for an
+        operator chasing a bug than silent 404s.
+    """
+    if user.is_admin:
+        return
+    if demo.user_id is not None and demo.user_id == user.id:
+        return
+    raise HTTPException(status_code=403, detail="Not authorized to access this demo")
+
+
+# ---------------------------------------------------------------------------
+# List — owner-scoped (admin bypass)
 # ---------------------------------------------------------------------------
 @router.get("", response_model=list[DemoSummary])
-async def list_demos(db: Session = Depends(get_db)):
-    demos = db.query(Demo).order_by(Demo.id.desc()).all()
+async def list_demos(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the caller's own demos. Admins get the full feed.
+
+    Anonymous callers receive 401 from ``get_current_user`` before
+    reaching this function.
+    """
+    q = db.query(Demo).order_by(Demo.id.desc())
+    if not current_user.is_admin:
+        q = q.filter(Demo.user_id == current_user.id)
+    demos = q.all()
     return [DemoSummary.model_validate(d.to_dict()) for d in demos]
 
 
@@ -52,6 +90,7 @@ async def upload_demo(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
@@ -63,11 +102,16 @@ async def upload_demo(
     storage = get_storage()
     _, storage_filename, abs_path = storage.save_demo(file)
 
+    # Stamp ownership at upload time so the access checks downstream
+    # (read / reprocess / delete) can authoritatively know who can touch
+    # this demo. Without ``user_id`` the demo would become an orphan and
+    # only admins could see it.
     demo = Demo(
         filename=file.filename,
         storage_filename=storage_filename,
         status="queued",
         processing_progress=0,
+        user_id=current_user.id,
     )
     db.add(demo)
     db.commit()
@@ -88,10 +132,15 @@ async def upload_demo(
 # Detail
 # ---------------------------------------------------------------------------
 @router.get("/{demo_id}", response_model=DemoSummary)
-async def get_demo(demo_id: int, db: Session = Depends(get_db)):
+async def get_demo(
+    demo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
+    _check_demo_access(demo, current_user)
     return DemoSummary.model_validate(demo.to_dict())
 
 
@@ -99,10 +148,15 @@ async def get_demo(demo_id: int, db: Session = Depends(get_db)):
 # Status
 # ---------------------------------------------------------------------------
 @router.get("/{demo_id}/status", response_model=DemoStatusResponse)
-async def get_demo_status(demo_id: int, db: Session = Depends(get_db)):
+async def get_demo_status(
+    demo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
+    _check_demo_access(demo, current_user)
     return DemoStatusResponse(
         id=str(demo.id),
         status=demo.status,
@@ -115,10 +169,15 @@ async def get_demo_status(demo_id: int, db: Session = Depends(get_db)):
 # Analysis (without heavy timeline frames — just metadata)
 # ---------------------------------------------------------------------------
 @router.get("/{demo_id}/analysis", response_model=DemoAnalysisResponse)
-async def get_demo_analysis(demo_id: int, db: Session = Depends(get_db)):
+async def get_demo_analysis(
+    demo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
+    _check_demo_access(demo, current_user)
     if demo.status != "completed" or not demo.analysis_data:
         raise HTTPException(status_code=409, detail=f"Demo is not ready (status={demo.status})")
 
@@ -163,10 +222,15 @@ async def get_demo_analysis(demo_id: int, db: Session = Depends(get_db)):
 # Insights — pre-computed heuristic analytics (served from cache)
 # ---------------------------------------------------------------------------
 @router.get("/{demo_id}/insights", response_model=DemoInsightsResponse)
-async def get_demo_insights(demo_id: int, db: Session = Depends(get_db)):
+async def get_demo_insights(
+    demo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
+    _check_demo_access(demo, current_user)
     if demo.status != "completed":
         raise HTTPException(status_code=409, detail=f"Demo is not ready (status={demo.status})")
     row = db.query(DemoInsight).filter(DemoInsight.demo_id == demo_id).first()
@@ -186,10 +250,16 @@ async def get_demo_insights(demo_id: int, db: Session = Depends(get_db)):
 # Per-round 2D timeline (heavy: frames + events for the replay viewer)
 # ---------------------------------------------------------------------------
 @router.get("/{demo_id}/timeline/{round_number}", response_model=RoundTimelineResponse)
-async def get_round_timeline(demo_id: int, round_number: int, db: Session = Depends(get_db)):
+async def get_round_timeline(
+    demo_id: int,
+    round_number: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
+    _check_demo_access(demo, current_user)
     if demo.status != "completed" or not demo.analysis_data:
         raise HTTPException(status_code=409, detail=f"Demo is not ready (status={demo.status})")
 
@@ -232,27 +302,17 @@ async def reprocess_demo(
     demo_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
 
-    # Ownership check is conditional:
-    #   - If the demo has an owner (user_id), a logged-in user must
-    #     either be that owner OR an admin.
-    #   - If the demo is orphan (user_id is NULL — anonymous upload
-    #     from before auth was wired) anyone, authenticated or not,
-    #     can re-parse it. This unblocks dev / single-user setups
-    #     that don't run the Steam OpenID flow yet.
-    if demo.user_id is not None:
-        if current_user is None:
-            raise HTTPException(
-                status_code=401,
-                detail="This demo is owned by another account — sign in to reprocess.",
-            )
-        if demo.user_id != current_user.id and not current_user.is_admin:
-            raise HTTPException(status_code=403, detail="Not authorized")
+    # Same private-demo rules as read endpoints — only the owner (or an
+    # admin) can re-trigger parsing. Orphan demos with ``user_id IS NULL``
+    # are admin-only recovery territory; anonymous reprocesses were a
+    # pre-auth shortcut that no longer fits the production model.
+    _check_demo_access(demo, current_user)
 
     if demo.status == "queued" or demo.status == "processing":
         raise HTTPException(
@@ -291,13 +351,24 @@ async def reprocess_demo(
 
 
 # ---------------------------------------------------------------------------
-# Delete
+# Delete — owner-only, admin bypass.
 # ---------------------------------------------------------------------------
 @router.delete("/{demo_id}", status_code=204)
-async def delete_demo(demo_id: int, db: Session = Depends(get_db)):
+async def delete_demo(
+    demo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hard-delete a demo. Only the owner (or an admin) can do this.
+
+    Previously this endpoint had NO auth at all — any visitor could
+    enumerate demo IDs and wipe them. The check now matches the rest
+    of the read endpoints in this module.
+    """
     demo = db.query(Demo).filter(Demo.id == demo_id).first()
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
+    _check_demo_access(demo, current_user)
     storage = get_storage()
     storage.delete_demo(demo.storage_filename)
     db.delete(demo)
