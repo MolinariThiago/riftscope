@@ -68,16 +68,29 @@ def _issue_token(user: User) -> str:
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
+    """Issue the httpOnly session cookie with environment-aware flags.
+
+    In development the API + frontend share ``localhost`` so a plain
+    ``samesite=lax`` cookie over HTTP is fine and avoids the
+    "secure cookies require HTTPS" footgun.
+
+    In production the frontend (Vercel) and API (Railway / Render)
+    live on different registrable domains — that's a CROSS-SITE
+    context, so the browser will only attach the cookie if it is both
+    ``samesite=none`` AND ``secure=True``.  Sticking with ``lax`` (the
+    previous default) silently dropped the cookie on every cross-site
+    XHR, making login appear to succeed but ``/auth/me`` 401 forever.
+    """
     settings = get_settings()
-    # ``secure=True`` would block local-dev HTTP — flip on in prod by
-    # setting ENVIRONMENT=production and switching this when we have
-    # the deployment story.
+    is_dev = settings.environment == "development"
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
         httponly=True,
-        secure=settings.environment != "development",
-        samesite="lax",
+        # SameSite=None *requires* Secure per the cookie spec; modern
+        # browsers reject the combination otherwise.  Tied together.
+        secure=not is_dev,
+        samesite="lax" if is_dev else "none",
         max_age=settings.access_token_expire_minutes * 60,
         path="/",
     )
@@ -174,7 +187,18 @@ def get_session(user: Optional[User] = Depends(get_current_user_optional)):
 # ---------------------------------------------------------------------------
 @router.post("/logout")
 def logout(response: Response):
-    response.delete_cookie(COOKIE_NAME, path="/")
+    # Delete with the SAME samesite + secure flags used at set time —
+    # Chromium-based browsers will refuse to clear a SameSite=None
+    # cookie when the Set-Cookie reply that's supposed to expire it
+    # uses Lax, leaving a stale session token on the device.
+    settings = get_settings()
+    is_dev = settings.environment == "development"
+    response.delete_cookie(
+        COOKIE_NAME,
+        path="/",
+        samesite="lax" if is_dev else "none",
+        secure=not is_dev,
+    )
     return {"ok": True}
 
 
