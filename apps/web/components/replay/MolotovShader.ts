@@ -9,9 +9,10 @@ import {
 } from "pixi.js";
 
 // Bump on every shader-source change so HMR evicts stale meshes.
+// (Module-load console.log removed in the production-ready audit;
+// the version constant is still useful as a code-side marker.)
 const MOLOTOV_SHADER_VERSION = "v8-mesh-extended-wall-parity";
-// eslint-disable-next-line no-console
-console.log("[MolotovShader] loaded", MOLOTOV_SHADER_VERSION);
+void MOLOTOV_SHADER_VERSION; // referenced for the doc; no runtime effect
 
 // =============================================================================
 // CS2-radar-style molotov / incendiary — single solid filled blob + central icon.

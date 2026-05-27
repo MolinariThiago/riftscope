@@ -8,11 +8,11 @@ import {
   type TextureSource,
 } from "pixi.js";
 
-// Bump this whenever the shader source changes — printed to the
-// console at module load so we can verify the latest build is live.
+// Bump this whenever the shader source changes so HMR evicts stale meshes.
+// (The module-load console.log was a dev-iteration helper and removed in
+// the production-ready audit — version still useful as a code-side marker.)
 const SMOKE_SHADER_VERSION = "v17-jittered-outer-ring";
-// eslint-disable-next-line no-console
-console.log("[SmokeShader] loaded", SMOKE_SHADER_VERSION);
+void SMOKE_SHADER_VERSION; // referenced for the doc; no runtime effect
 
 // =============================================================================
 // CS2.CAM smoke shader, rendered as a Mesh (NOT a Sprite + Filter).

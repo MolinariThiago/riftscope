@@ -29,7 +29,8 @@ redis==5.2.1
 # for heavy aggregations. 2.2.x has wheels for Python 3.12 + 3.13.
 pandas==2.2.3
 
-# Production auth — passlib provides hashlib-backed verification for
-# legacy hashes alongside the bcrypt module already pinned in
-# requirements.txt. New hashes are produced by bcrypt directly.
-passlib[bcrypt]==1.7.4
+# passlib was removed in the production-ready audit — auth is Steam
+# OpenID only (see apps/api/routers/auth.py); no password hashing is
+# performed anywhere in the codebase, so the import never resolved
+# to anything useful. Add it back if email/password login is wired
+# in later.

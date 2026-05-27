@@ -3074,8 +3074,6 @@ async function createWallMask(radarUrl: string): Promise<Texture | null> {
         }
         wallMaskCache.set(cacheKey, tex);
         wallMaskLoading.delete(cacheKey);
-        // eslint-disable-next-line no-console
-        console.log("[WallMask] loaded authored mask:", walkableUrl);
         return tex;
       } catch {
         return null; // 404 / network fail → fall through to legacy
@@ -3387,13 +3385,10 @@ async function createWallMask(radarUrl: string): Promise<Texture | null> {
         if (labels[i] > 0 && keep[labels[i]] === 1) filtered[i] = 1;
       }
 
-      // eslint-disable-next-line no-console
-      console.log(
-        "[WallMask] %s HSV: opaque=%d walk=%d components=%d kept=%d (min=%d)",
-        radarUrl, opaqueCount, walkCount, nextLabel - 1,
-        keep.reduce((a, b) => a + b, 0),
-        minComponent,
-      );
+      // (Per-mask HSV statistics console.log removed in the
+      // production-ready audit — opaqueCount / walkCount / kept
+      // are still computed because step 4 needs them, but we no
+      // longer dump them to the console on every mask generation.)
 
       // ============================================================
       // Step 5 — CHAMFER DISTANCE TRANSFORM → SOFT ALPHA
