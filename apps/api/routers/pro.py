@@ -83,7 +83,10 @@ async def list_pro_matches(
 
 
 @router.post("/sync")
-async def sync_pro_matches(db: Session = Depends(get_db)):
+async def sync_pro_matches(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
     """
     Pull recent matches from every active source and upsert them.
 
@@ -176,6 +179,7 @@ async def import_pro_match(
     match_id: int,
     background_tasks: BackgroundTasks,  # accepted for API parity; unused
     db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
 ):
     """Manual one-off trigger of the same logic the scheduler uses."""
     del background_tasks  # unused — service uses asyncio.create_task
@@ -211,14 +215,19 @@ async def import_pro_match(
 
 
 @router.get("/scheduler/status")
-async def get_scheduler_status():
+async def get_scheduler_status(_admin: User = Depends(require_admin)):
     """Tiny status endpoint so the UI can show whether the auto-import
-    background task is alive and when it last ran."""
+    background task is alive and when it last ran.
+
+    Admin-only: the payload includes the last-tick timestamps, RAR
+    runtime path, and import error counts — operational info that
+    shouldn't be enumerable by anonymous visitors.
+    """
     return scheduler_status()
 
 
 @router.get("/proxy-test")
-async def test_proxy():
+async def test_proxy(_admin: User = Depends(require_admin)):
     """Verify the configured outbound proxy actually works.
 
     Hits an IP-echo service (api.ipify.org) twice — once direct and
@@ -449,7 +458,13 @@ async def upload_pro_match(
 
 
 @router.delete("/matches/{match_id}")
-async def delete_pro_match(match_id: int, db: Session = Depends(get_db)):
+async def delete_pro_match(
+    match_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Admin-only cleanup. Previously this had NO auth — any visitor
+    could enumerate ``match_id`` and wipe entries from the pro feed."""
     row = db.query(ProMatch).filter(ProMatch.id == match_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Pro match not found")
