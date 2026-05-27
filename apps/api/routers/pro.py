@@ -35,6 +35,7 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
+from core.settings import get_settings
 from db.database import get_db
 from db.models.demo import Demo
 from db.models.pro_match import ProMatch
@@ -394,16 +395,63 @@ async def upload_pro_match(
     played_naive = played_dt.astimezone(timezone.utc).replace(tzinfo=None)
 
     # Persist the .dem to storage via the same path the upload UI uses.
+    #
+    # Stream the upload to disk in 1 MB chunks instead of buffering the
+    # whole file in RAM (the previous ``await file.read()`` call would
+    # try to materialise up to ``upload_max_bytes`` = 2 GB in memory,
+    # which OOM-killed the API process on a single big HLTV upload).
+    #
+    # Validate the HL2DEMO magic on the FIRST chunk so non-demo files
+    # are rejected after at most 1 MB of disk writes — early enough
+    # that the cleanup path doesn't leave huge garbage behind.
     storage_filename = f"{uuid4()}.dem"
     abs_path = UPLOAD_DIR / storage_filename
-    # ``UploadFile.file`` is a SpooledTemporaryFile we can stream.
-    contents = await file.read()
-    if not contents.startswith(b"HL2DEMO"):
-        raise HTTPException(
-            status_code=400,
-            detail="File doesn't look like a CS2 demo (missing HL2DEMO header)",
-        )
-    abs_path.write_bytes(contents)
+    settings = get_settings()
+    max_bytes = settings.upload_max_bytes
+    CHUNK = 1024 * 1024  # 1 MB
+    total = 0
+    first_chunk = True
+    try:
+        with abs_path.open("wb") as out_fp:
+            while True:
+                chunk = await file.read(CHUNK)
+                if not chunk:
+                    break
+                if first_chunk:
+                    if not chunk.startswith(b"HL2DEMO"):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="File doesn't look like a CS2 demo (missing HL2DEMO header)",
+                        )
+                    first_chunk = False
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Upload exceeds the {max_bytes} byte limit. "
+                            "Trim the demo or raise UPLOAD_MAX_BYTES in the API env."
+                        ),
+                    )
+                out_fp.write(chunk)
+    except HTTPException:
+        # Rollback the partial file so a rejected upload doesn't leak
+        # disk space.  ``missing_ok=True`` is correct since the file
+        # may not exist if validation failed before the first write.
+        try:
+            abs_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    if first_chunk:
+        # Stream was empty — never read a single byte.  Treat as a bad
+        # request rather than a "queued" demo that will silently fail
+        # to parse later.
+        try:
+            abs_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
     # Create the Demo row + queue parsing.
     demo = Demo(
