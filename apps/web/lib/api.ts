@@ -10,6 +10,19 @@ import type {
   PlayerSearchResponse,
   RoundTimeline,
 } from "@/types/demo";
+import type {
+  PlaybookFolder,
+  PlaybookFull,
+  PlaybookSummary,
+  PlaybookWriteBody,
+  TeamInfo,
+} from "@/types/playbook";
+import type {
+  AntiStratTeam,
+  MapStrength,
+  PreMatchReport,
+  TeamReport,
+} from "@/types/anti-strat";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -93,6 +106,66 @@ export const api = {
     list: () => request<MapMetadata[]>("/maps"),
     get: (name: string) =>
       request<MapMetadata>(`/maps/${encodeURIComponent(name)}`),
+  },
+
+  playbooks: {
+    list: () => request<PlaybookSummary[]>("/playbooks"),
+    get: (id: number) => request<PlaybookFull>(`/playbooks/${id}`),
+    create: (body: PlaybookWriteBody) =>
+      request<PlaybookFull>("/playbooks", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    update: (id: number, body: Partial<PlaybookWriteBody>) =>
+      request<PlaybookFull>(`/playbooks/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    delete: (id: number) =>
+      request<void>(`/playbooks/${id}`, { method: "DELETE" }),
+  },
+
+  folders: {
+    list: () => request<PlaybookFolder[]>("/playbook-folders"),
+    create: (name: string, teamId: number | null = null) =>
+      request<PlaybookFolder>("/playbook-folders", {
+        method: "POST",
+        body: JSON.stringify({ name, teamId }),
+      }),
+    rename: (id: number, name: string) =>
+      request<PlaybookFolder>(`/playbook-folders/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name }),
+      }),
+    delete: (id: number) =>
+      request<void>(`/playbook-folders/${id}`, { method: "DELETE" }),
+  },
+
+  teams: {
+    list: () => request<TeamInfo[]>("/teams"),
+    create: (name: string) =>
+      request<TeamInfo>("/teams", { method: "POST", body: JSON.stringify({ name }) }),
+    join: (code: string) =>
+      request<TeamInfo>("/teams/join", { method: "POST", body: JSON.stringify({ code }) }),
+    leave: (id: number) =>
+      request<void>(`/teams/${id}/leave`, { method: "POST" }),
+    delete: (id: number) =>
+      request<void>(`/teams/${id}`, { method: "DELETE" }),
+  },
+
+  antiStrat: {
+    teams: () => request<AntiStratTeam[]>("/anti-strat/teams"),
+    report: (team: string, map?: string) =>
+      request<TeamReport>(
+        `/anti-strat/report?team=${encodeURIComponent(team)}` +
+          (map ? `&map=${encodeURIComponent(map)}` : ""),
+      ),
+    maps: (team: string) =>
+      request<MapStrength[]>(`/anti-strat/maps?team=${encodeURIComponent(team)}`),
+    preMatch: (team: string) =>
+      request<PreMatchReport>(
+        `/anti-strat/pre-match?team=${encodeURIComponent(team)}`,
+      ),
   },
 
   pro: {
@@ -229,6 +302,16 @@ export const api = {
     me: () => request<AuthUser>("/auth/me"),
     session: () =>
       request<{ authenticated: boolean; user: AuthUser | null }>("/auth/session"),
+    register: (body: { email: string; password: string; username?: string }) =>
+      request<AuthUser>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    login: (body: { email: string; password: string }) =>
+      request<AuthUser>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
     logout: () => request<void>("/auth/logout", { method: "POST" }),
     steam: {
       // Backend issues a 302 here — fetch'ing it directly wouldn't follow

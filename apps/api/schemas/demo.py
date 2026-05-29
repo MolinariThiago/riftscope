@@ -38,6 +38,10 @@ class DemoSummary(BaseModel):
     duration_seconds: Optional[int] = Field(None, alias="durationSeconds")
     round_count: Optional[int] = Field(None, alias="roundCount")
     score: Optional[list[int]] = None
+    # Team identity (Phase 0). A started CT, B started T. Null until a
+    # demo is (re)parsed with clan extraction.
+    team_a: Optional[str] = Field(None, alias="teamA")
+    team_b: Optional[str] = Field(None, alias="teamB")
 
     model_config = ConfigDict(populate_by_name=True)
 

@@ -71,6 +71,11 @@ export default function DashboardLayout({
   // force the sidebar into compact icon-only mode while we're on
   // that route. Everything else keeps the normal dashboard chrome.
   const isReplay = /\/demo\/[^/]+\/replay(\/|$)/.test(pathname);
+  // The tactical board is also a full-bleed canvas tool — it keeps the
+  // TopBar + sidebar but drops the main-area padding/scroll so the
+  // board can fill the space via ``absolute inset-0``.
+  const isTactics = pathname === "/tactics" || pathname.startsWith("/tactics/");
+  const fullBleedMain = isReplay || isTactics;
 
   return (
     <div className="flex h-screen bg-background overflow-hidden relative">
@@ -87,7 +92,7 @@ export default function DashboardLayout({
             // height. ``h-full`` cascading through ``flex: 1`` parents
             // is fragile across browsers; absolute positioning is the
             // bulletproof option for a full-bleed canvas viewer.
-            isReplay ? "overflow-hidden p-0 relative" : "overflow-y-auto p-6",
+            fullBleedMain ? "overflow-hidden p-0 relative" : "overflow-y-auto p-6",
           )}
         >
           {children}

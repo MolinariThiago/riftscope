@@ -167,9 +167,13 @@ function capitalizeMap(name: string | null): string {
 }
 
 function teamLabel(demo: DemoSummary): string {
-  // Stub heuristic until we expose team identifiers from analysis_data.
-  // Use the demo filename's last stem so each row reads differently and
-  // visually distinguishes teams when multiple demos appear.
+  // Phase 0 — prefer the real team/clan names extracted from the demo.
+  // Falls back to the filename stem for older demos parsed before clan
+  // extraction (teamA/teamB still null until they're re-parsed).
+  if (demo.teamA && demo.teamB) {
+    const m = `${demo.teamA} vs ${demo.teamB}`;
+    return m.length > 30 ? m.slice(0, 28) + "…" : m;
+  }
   const base = (demo.filename || "team").replace(/\.dem(\.gz)?$/i, "");
   if (base.length > 24) return base.slice(0, 22) + "…";
   return base;

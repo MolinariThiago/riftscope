@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Box,
@@ -42,8 +42,11 @@ import {
 } from "@/lib/hooks/useDemos";
 import { useMapMeta } from "@/lib/hooks/useMaps";
 import { useRoundPlayback } from "@/lib/hooks/useRoundPlayback";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { SaveRoundDialog, type SaveRoundOpts } from "@/components/replay/SaveRoundDialog";
 import type { PlayerStats } from "@/types/demo";
+import type { BoardEntity, PlaybookData, Vec2 } from "@/types/playbook";
 
 export default function ReplayPage() {
   const params = useParams<{ id: string }>();
@@ -69,6 +72,10 @@ export default function ReplayPage() {
   // Imperative handle on PixiMapCanvas so the tools panel can fire a
   // screenshot without needing the canvas to subscribe to a prop change.
   const canvasRef = useRef<PixiMapCanvasHandle | null>(null);
+  // Transient confirmation after "save round to Playbook".
+  const [savedPill, setSavedPill] = useState<string | null>(null);
+  const router = useRouter();
+  const [saveOpen, setSaveOpen] = useState(false);
 
   // Panel customization mode. Default OFF — panels are locked at their
   // CS2-style positions (team cards on the right, transient killfeed top
@@ -86,11 +93,17 @@ export default function ReplayPage() {
     try { localStorage.setItem("riftscope.editPanels", editPanels ? "1" : "0"); } catch { /* */ }
   }, [editPanels]);
 
+  const searchParams = useSearchParams();
+  // Initial round: honor ?round=N from anti-strat / playbook deep links
+  // when it points at a real round, otherwise start at the first round.
   useEffect(() => {
     if (analysis && currentRound === null && analysis.rounds.length > 0) {
-      setCurrentRound(analysis.rounds[0].number);
+      const wanted = Number(searchParams.get("round"));
+      const valid =
+        Number.isFinite(wanted) && analysis.rounds.some((r) => r.number === wanted);
+      setCurrentRound(valid ? wanted : analysis.rounds[0].number);
     }
-  }, [analysis, currentRound]);
+  }, [analysis, currentRound, searchParams]);
 
   const { data: timeline, isLoading: timelineLoading } = useRoundTimeline(
     demoId ?? null,
@@ -141,6 +154,74 @@ export default function ReplayPage() {
     ).length,
     [analysis?.rounds, currentRound],
   );
+
+  // Snapshot the current round's player positions → PlaybookData (the
+  // "Import from 2D" flow behind the timeline-bar star).
+  const buildRoundData = (): PlaybookData | null => {
+    const frame = state.currentFrame;
+    if (!analysis || !frame || !frame.players?.length) return null;
+    const rs = mapMeta?.radarSize ?? 1024;
+    const sc = mapMeta?.scale ?? 4.5;
+    const px = mapMeta?.posX ?? -2000;
+    const py = mapMeta?.posY ?? 2000;
+    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+    const uid = () =>
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+
+    const entities: BoardEntity[] = [];
+    const positions: Record<string, Vec2> = {};
+    let ctN = 0;
+    let ttN = 0;
+    for (const p of frame.players) {
+      if (!p) continue;
+      const team: "ct" | "tt" = p.team === "tt" ? "tt" : "ct";
+      const id = uid();
+      entities.push({ id, kind: "player", team, label: String(team === "ct" ? ++ctN : ++ttN), rot: 0 });
+      positions[id] = {
+        x: clamp01((p.x - px) / (sc * rs)),
+        y: clamp01((py - p.y) / (sc * rs)),
+      };
+    }
+    return {
+      schemaVersion: 1,
+      entities,
+      frames: [{ id: uid(), name: `Round ${currentRound ?? 1}`, durationMs: 1000, positions, hidden: [], strokes: [] }],
+    };
+  };
+
+  // Called by the SaveRoundDialog after the user picks name / type / folder.
+  const confirmSaveRound = async ({ name, type, folderId, openAfter }: SaveRoundOpts) => {
+    if (!analysis) throw new Error("No round to save yet");
+    const map = analysis.demo.map ?? "de_mirage";
+
+    if (openAfter) {
+      // "Save & draw": snapshot the positions onto the tactical board so the
+      // user can annotate. This is a hand-drawn tactic, not a round reference.
+      const data = buildRoundData();
+      if (!data) throw new Error("No round to save yet");
+      const created = await api.playbooks.create({
+        title: name, map, side: null, type, tags: [],
+        teamId: null, folderId, kind: "tactic", data,
+      });
+      setSavedPill("Guardado ✓");
+      setTimeout(() => setSavedPill(null), 2500);
+      router.push(`/tactics?load=${created.id}`);
+      return;
+    }
+
+    // Default "Save": store a REAL reference to this demo round, so replaying
+    // it later jumps back to the actual round in the 2D viewer.
+    await api.playbooks.create({
+      title: name, map, side: null, type, tags: [],
+      teamId: null, folderId, kind: "round",
+      demoId: demoId ? Number(demoId) : null,
+      roundNumber: currentRound,
+    });
+    setSavedPill("Ronda guardada ✓");
+    setTimeout(() => setSavedPill(null), 2500);
+  };
 
   // ============== Loading / processing states ==============
   if (!ready) {
@@ -200,6 +281,11 @@ export default function ReplayPage() {
 
       {/* ================= MAIN AREA ================= */}
       <main className="relative flex-1 overflow-hidden">
+        {savedPill && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-lg bg-background/90 backdrop-blur border border-primary/40 text-xs font-mono-rs text-primary shadow-lg pointer-events-none">
+            {savedPill}
+          </div>
+        )}
         {/* MAP — fills the entire main area as background */}
         <div className="absolute inset-0">
           {/* Subtle vignette around the canvas edges — radial gradient
@@ -582,6 +668,14 @@ export default function ReplayPage() {
         drawingMode={drawingMode}
         onToggleDrawing={() => setDrawingMode((v) => !v)}
         onClearDrawings={() => canvasRef.current?.clearDrawings()}
+        onBookmark={() => setSaveOpen(true)}
+      />
+
+      <SaveRoundDialog
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        suggestedName={`${mapMeta?.displayName ?? analysis.demo.map ?? "Map"} · Round ${currentRound ?? 1}`}
+        onConfirm={confirmSaveRound}
       />
     </div>
   );

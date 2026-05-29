@@ -3,8 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Ban,
   BarChart2,
   ChevronLeft,
+  ClipboardList,
+  Crosshair,
+  Library,
+  PenTool,
   Settings,
   ShieldCheck,
   Telescope,
@@ -115,6 +120,42 @@ export function Sidebar({ forceCollapsed = false }: SidebarProps) {
             collapsed={collapsed}
           />
         ))}
+        {/* Tactical board + playbook — literal labels (i18n-free), like Admin. */}
+        <SidebarItem
+          href="/tactics"
+          icon={PenTool}
+          label="Tactics"
+          active={pathname === "/tactics" || pathname.startsWith("/tactics/")}
+          collapsed={collapsed}
+        />
+        <SidebarItem
+          href="/playbook"
+          icon={Library}
+          label="Playbook"
+          active={pathname === "/playbook" || pathname.startsWith("/playbook/")}
+          collapsed={collapsed}
+        />
+        <SidebarItem
+          href="/anti-strat"
+          icon={Crosshair}
+          label="Anti-strat"
+          active={pathname === "/anti-strat" || pathname.startsWith("/anti-strat/")}
+          collapsed={collapsed}
+        />
+        <SidebarItem
+          href="/vetos"
+          icon={Ban}
+          label="Vetos"
+          active={pathname === "/vetos" || pathname.startsWith("/vetos/")}
+          collapsed={collapsed}
+        />
+        <SidebarItem
+          href="/pre-match"
+          icon={ClipboardList}
+          label="Pre-partida"
+          active={pathname === "/pre-match" || pathname.startsWith("/pre-match/")}
+          collapsed={collapsed}
+        />
       </nav>
 
       <div className="py-4 px-2 space-y-1 border-t border-border">

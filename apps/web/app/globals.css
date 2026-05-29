@@ -324,3 +324,37 @@
     box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3);
   }
 }
+
+/* ============================================================
+   LANDING / AUTH — clean helpers (additive only)
+   ============================================================ */
+
+@layer components {
+  /* Static tactical grid — calm backdrop for radar / match thumbnails */
+  .map-grid {
+    background-image:
+      linear-gradient(hsl(var(--primary) / 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--primary) / 0.07) 1px, transparent 1px);
+    background-size: 26px 26px;
+  }
+}
+
+@layer utilities {
+  /* Underline that slides in from the left on hover */
+  .link-underline {
+    position: relative;
+  }
+  .link-underline::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -4px;
+    height: 1.5px;
+    width: 100%;
+    background: hsl(var(--primary));
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .link-underline:hover::after { transform: scaleX(1); }
+}

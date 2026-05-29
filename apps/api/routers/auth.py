@@ -28,7 +28,10 @@ deployment we recommend for prod).
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import os
 import re
 from datetime import datetime, timedelta
 from typing import Optional
@@ -38,6 +41,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from jose import jwt
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.settings import get_settings
@@ -130,6 +134,80 @@ def _serialize_user(u: User) -> dict:
         "created_at": u.created_at.isoformat() if u.created_at else None,
         "last_login": u.last_login.isoformat() if u.last_login else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Email / password auth — dependency-free pbkdf2 hashing (no passlib/bcrypt
+# needed, so it runs on the slim requirements + fragile dev venvs).
+# ---------------------------------------------------------------------------
+def _hash_password(pw: str) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, 200_000)
+    return f"pbkdf2_sha256$200000${salt.hex()}${dk.hex()}"
+
+
+def _verify_password(pw: str, stored: Optional[str]) -> bool:
+    if not stored:
+        return False
+    try:
+        algo, iters, salt_hex, hash_hex = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), bytes.fromhex(salt_hex), int(iters))
+        return hmac.compare_digest(dk.hex(), hash_hex)
+    except Exception:
+        return False
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    username: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/register")
+def register(body: RegisterRequest, response: Response, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Enter a valid email")
+    if len(body.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters",
+        )
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That email is already registered")
+    user = User(
+        email=email,
+        username=(body.username or "").strip() or None,
+        password_hash=_hash_password(body.password),
+        last_login=utcnow_naive(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    _set_session_cookie(response, _issue_token(user))
+    return _serialize_user(user)
+
+
+@router.post("/login")
+def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not _verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
+    user.last_login = utcnow_naive()
+    db.commit()
+    db.refresh(user)
+    _set_session_cookie(response, _issue_token(user))
+    return _serialize_user(user)
 
 
 # ---------------------------------------------------------------------------

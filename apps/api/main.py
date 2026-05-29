@@ -23,7 +23,21 @@ from db.models.user import User  # noqa: F401
 from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound  # noqa: F401
 from db.models.insight import DemoInsight  # noqa: F401
 from db.models.pro_match import ProMatch  # noqa: F401
-from routers import admin, auth, demos, maps, players, pro
+from db.models.playbook import Playbook, PlaybookFolder  # noqa: F401
+from db.models.round_tactic import RoundTactic  # noqa: F401
+from db.models.team import Team, TeamMember  # noqa: F401
+from routers import (
+    admin,
+    anti_strat,
+    auth,
+    demos,
+    maps,
+    players,
+    playbook,
+    playbook_folders,
+    pro,
+    team,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,6 +87,41 @@ def _ensure_steam_columns() -> None:
                     text("ALTER TABLE pro_matches ADD COLUMN tier VARCHAR")
                 )
                 logger.info("migrated pro_matches table: added tier")
+
+    # Playbook: type + tags columns added after the table first shipped.
+    if "playbooks" in insp.get_table_names():
+        existing_pb = {col["name"] for col in insp.get_columns("playbooks")}
+        new_pb = {
+            "type": "VARCHAR",
+            "tags": "JSON",
+            "team_id": "INTEGER",
+            "folder_id": "INTEGER",
+            "kind": "VARCHAR DEFAULT 'tactic'",
+            "demo_id": "INTEGER",
+            "round_number": "INTEGER",
+        }
+        with engine.begin() as conn:
+            for col_name, col_type in new_pb.items():
+                if col_name not in existing_pb:
+                    conn.execute(
+                        text(f"ALTER TABLE playbooks ADD COLUMN {col_name} {col_type}")
+                    )
+                    logger.info("migrated playbooks table: added %s", col_name)
+
+    # Team identity (Phase 0): clan/team names on demos + demo_players.
+    if "demos" in insp.get_table_names():
+        existing_d = {col["name"] for col in insp.get_columns("demos")}
+        with engine.begin() as conn:
+            for col_name in ("team_a_name", "team_b_name"):
+                if col_name not in existing_d:
+                    conn.execute(text(f"ALTER TABLE demos ADD COLUMN {col_name} VARCHAR"))
+                    logger.info("migrated demos table: added %s", col_name)
+    if "demo_players" in insp.get_table_names():
+        existing_dp = {col["name"] for col in insp.get_columns("demo_players")}
+        if "clan_name" not in existing_dp:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE demo_players ADD COLUMN clan_name VARCHAR"))
+                logger.info("migrated demo_players table: added clan_name")
 
 
 @asynccontextmanager
@@ -146,6 +195,12 @@ async def health():
 app.include_router(demos.router, prefix="/demos", tags=["demos"])
 app.include_router(players.router, prefix="/players", tags=["players"])
 app.include_router(maps.router, prefix="/maps", tags=["maps"])
+app.include_router(playbook.router, prefix="/playbooks", tags=["playbooks"])
+app.include_router(
+    playbook_folders.router, prefix="/playbook-folders", tags=["playbook-folders"]
+)
+app.include_router(team.router, prefix="/teams", tags=["teams"])
+app.include_router(anti_strat.router, prefix="/anti-strat", tags=["anti-strat"])
 app.include_router(pro.router, prefix="/pro", tags=["pro"])
 # ``admin`` and ``auth`` set their own ``prefix=`` on the APIRouter so we
 # pass them in bare here — passing prefix twice would yield e.g.

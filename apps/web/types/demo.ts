@@ -17,6 +17,9 @@ export interface DemoSummary {
   durationSeconds: number | null;
   roundCount: number | null;
   score: [number, number] | null;
+  /** Team identity (Phase 0). A started CT, B started T. Null on older/unparsed demos. */
+  teamA?: string | null;
+  teamB?: string | null;
 }
 
 export type Demo = DemoSummary;

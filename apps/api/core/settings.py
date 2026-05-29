@@ -36,9 +36,16 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./riftscope.db"
 
-    # CORS — accept comma-separated list via env (CORS_ORIGINS=...)
+    # CORS — accept comma-separated list via env (CORS_ORIGINS=...).
+    # Dev: allow both :3000 (canonical — Steam return_to + FRONTEND_ORIGIN)
+    # and :3001 (the port Next falls back to when 3000 is busy).
     cors_origins: List[str] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+        ]
     )
 
     # Storage

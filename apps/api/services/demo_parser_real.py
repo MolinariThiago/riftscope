@@ -296,6 +296,12 @@ class RealDemoParser:
             "team_num", "active_weapon_name", "balance",
             "has_helmet", "has_defuser",
             "velocity_Z",
+            # Clan / team name per player — the foundation of all
+            # "anti-strat" features (which are per-TEAM, not per-side).
+            # Best-effort: older demoparser2 builds that don't expose it
+            # are handled by the cascading-prop fallback below, leaving
+            # clans empty (team identity simply unknown for that demo).
+            "team_clan_name",
             # ``inventory`` is a list-of-strings per player per tick
             # containing every weapon / grenade currently held. We
             # use it at the start of each round to seed the grenade
@@ -615,6 +621,23 @@ class RealDemoParser:
             team_num_to_side=team_num_to_side,
         )
 
+        # ---- Team identity (Phase 0): resolve each player's clan name -------
+        # Clan is constant per player across the match, so one non-empty
+        # value per steamid is enough. Best-effort + guarded: a missing
+        # column (older parser build) just leaves clans unset.
+        try:
+            if ticks is not None and "team_clan_name" in getattr(ticks, "columns", []):
+                cl = ticks[["steamid", "team_clan_name"]].dropna().copy()
+                cl["team_clan_name"] = cl["team_clan_name"].astype(str).str.strip()
+                cl = cl[(cl["team_clan_name"] != "") & (cl["team_clan_name"].str.lower() != "nan")]
+                cl = cl.drop_duplicates("steamid")
+                clan_by_sid = dict(zip(cl["steamid"].astype(str), cl["team_clan_name"]))
+                for _sid, _m in players_meta.items():
+                    if _sid in clan_by_sid:
+                        _m["clan"] = clan_by_sid[_sid]
+        except Exception as _exc:  # pragma: no cover — defensive
+            logger.debug("clan extraction skipped: %s", _exc)
+
         # ---- Players summary stats (computed from kills + tick samples) -----
         players = self._build_players(players_meta, kills, len(rounds))
 
@@ -691,12 +714,24 @@ class RealDemoParser:
             team_num_to_side=team_num_to_side,
         )
 
+        # Team names: A = the clan that started on CT, B = started on T.
+        # (players_meta["team"] holds each player's FIRST-HALF side.)
+        def _mode_clan(side: str) -> str | None:
+            counts: dict[str, int] = {}
+            for _m in players_meta.values():
+                clan = _m.get("clan")
+                if _m.get("team") == side and clan:
+                    counts[clan] = counts.get(clan, 0) + 1
+            return max(counts, key=counts.get) if counts else None
+
         meta = {
             "map": map_name,
             "tickrate": tickrate,
             "durationSeconds": sum(r["durationSeconds"] for r in rounds),
             "roundCount": len(rounds),
             "score": [ct_score, tt_score],
+            "teamA": _mode_clan("ct"),
+            "teamB": _mode_clan("tt"),
         }
 
         # Cleanup helpers — drop internals before returning rounds.
@@ -1144,6 +1179,7 @@ class RealDemoParser:
                 "steamId": sid,
                 "name": info["name"],
                 "team": info["team"],
+                "clan": info.get("clan"),
                 "kills": kills_n,
                 "deaths": deaths_n,
                 "assists": 0,  # TODO: from player_death.assister_steamid

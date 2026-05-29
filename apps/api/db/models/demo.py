@@ -57,6 +57,10 @@ class Demo(Base):
     round_count = Column(Integer, nullable=True)
     score_ct = Column(Integer, nullable=True)
     score_tt = Column(Integer, nullable=True)
+    # Team identity (Phase 0) — clan names. A started on CT, B started on T.
+    # Indexed so anti-strat queries can scope "all demos of team X" fast.
+    team_a_name = Column(String, nullable=True, index=True)
+    team_b_name = Column(String, nullable=True, index=True)
 
     # Heavy parser output. Player/round/kill arrays are also normalized into
     # DemoPlayer/DemoRound/DemoKill, but the per-round 2D timeline (frames +
@@ -105,6 +109,8 @@ class Demo(Base):
             "durationSeconds": self.duration_seconds,
             "roundCount": self.round_count,
             "score": [self.score_ct, self.score_tt] if self.score_ct is not None else None,
+            "teamA": self.team_a_name,
+            "teamB": self.team_b_name,
         }
 
 
@@ -118,7 +124,8 @@ class DemoPlayer(Base):
 
     steam_id = Column(String, nullable=False, index=True)
     name = Column(String, nullable=False, index=True)
-    team = Column(String, nullable=False)  # "ct" | "tt"
+    team = Column(String, nullable=False)  # "ct" | "tt" (side)
+    clan_name = Column(String, nullable=True, index=True)  # team/clan identity
 
     kills = Column(Integer, default=0, nullable=False)
     deaths = Column(Integer, default=0, nullable=False)

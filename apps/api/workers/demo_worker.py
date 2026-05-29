@@ -28,6 +28,8 @@ from core.utc import utcnow_naive
 from db.database import SessionLocal
 from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound
 from db.models.insight import DemoInsight
+from db.models.round_tactic import RoundTactic
+from services.anti_strat import detect_round_tactics
 from services.insights import compute_insights, ENGINE_VERSION as INSIGHTS_VERSION
 from services.parser_factory import get_parser
 from services.storage import get_storage
@@ -230,6 +232,7 @@ def _persist_normalized(demo_id: int, analysis: dict[str, Any]) -> None:
                 steam_id=p["steamId"],
                 name=p["name"],
                 team=p["team"],
+                clan_name=p.get("clan"),
                 kills=p.get("kills", 0),
                 deaths=p.get("deaths", 0),
                 assists=p.get("assists", 0),
@@ -334,6 +337,47 @@ def _persist_insights(demo_id: int, analysis: dict[str, Any]) -> None:
         db.close()
 
 
+def _persist_round_tactics(demo_id: int, analysis: dict[str, Any], map_name: str) -> None:
+    """
+    Classify each round's T-side play (anti-strat) and persist one
+    :class:`RoundTactic` row per round.
+
+    Idempotent: wipes prior rows for the demo first so reprocessing always
+    reflects the latest classifier. Failures are logged but never block the
+    pipeline — the demo is still marked completed.
+    """
+    db = SessionLocal()
+    try:
+        try:
+            plays = detect_round_tactics(analysis, map_name)
+        except Exception:
+            logger.exception("anti-strat detection failed for demo %s", demo_id)
+            return
+
+        db.query(RoundTactic).filter(RoundTactic.demo_id == demo_id).delete()
+        for p in plays:
+            db.add(RoundTactic(
+                demo_id=demo_id,
+                round_number=p["round_number"],
+                half=p.get("half", 1),
+                team_name=p.get("team_name"),
+                map_name=map_name,
+                side=p.get("side", "tt"),
+                site=p.get("site"),
+                type=p.get("type", "default"),
+                plant_time=p.get("plant_time"),
+                won=p.get("won", False),
+                util_signature=p.get("util_signature"),
+            ))
+        db.commit()
+        logger.info("demo %s: persisted %d round tactics", demo_id, len(plays))
+    except Exception:
+        db.rollback()
+        logger.exception("persist_round_tactics db failure for demo %s", demo_id)
+    finally:
+        db.close()
+
+
 async def process_demo(demo_id: int, file_path: str) -> None:
     """
     Main async demo processing pipeline.
@@ -426,10 +470,13 @@ async def process_demo(demo_id: int, file_path: str) -> None:
             round_count=meta["roundCount"],
             score_ct=meta["score"][0],
             score_tt=meta["score"][1],
+            team_a_name=meta.get("teamA"),
+            team_b_name=meta.get("teamB"),
             analysis_data=analysis,
         )
         _persist_normalized(demo_id, analysis)
         _persist_insights(demo_id, analysis)
+        _persist_round_tactics(demo_id, analysis, meta["map"])
         persist_elapsed = _time.perf_counter() - t_persist
         total_elapsed = _time.perf_counter() - t0
         logger.info(

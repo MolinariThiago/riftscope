@@ -182,7 +182,7 @@ export function ReplayTimelineBar({
         <ToolBtn icon={Headphones} title="Demo audio (coming soon)" />
         <ToolBtn icon={Timer} title="Jump to time (coming soon)" />
         <ToolBtn icon={Gear} title="Layers / settings" onClick={onToggleLayers} />
-        <ToolBtn icon={Star} title="Bookmark this moment" onClick={onBookmark} />
+        <ToolBtn icon={Star} title="Save this round to your Playbook" onClick={onBookmark} />
         <ToolBtn icon={Camera} title="Export clip (coming soon)" />
       </div>
     </div>

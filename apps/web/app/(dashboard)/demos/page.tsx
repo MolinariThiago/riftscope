@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -42,6 +43,7 @@ export default function DemosPage() {
   const { data: demos, isLoading, error } = useDemos();
   const del = useDeleteDemo();
   const openUploadAt = useOpenUploadAt();
+  const router = useRouter();
 
   const [tab, setTab] = useState<Tab>("private");
   const [mapFilter, setMapFilter] = useState<string>("");
@@ -88,8 +90,10 @@ export default function DemosPage() {
         <TabButton active={tab === "public"} onClick={() => setTab("public")} icon={Trophy}>
           Public Demos
         </TabButton>
-        <TabButton active={tab === "playlists"} onClick={() => setTab("playlists")} icon={Layers}>
-          Playlists
+        {/* Playbook — second access point to the saved-tactics library
+            (the sidebar "Playbook" item is the other). Navigates there. */}
+        <TabButton active={false} onClick={() => router.push("/playbook")} icon={Layers}>
+          Playbook
         </TabButton>
       </div>
 
