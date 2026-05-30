@@ -50,42 +50,40 @@ export function DemoCard({ demo, onDelete, deleting }: DemoCardProps) {
           </div>
 
           <div className="flex-1 min-w-0">
-            {/* Score row 1 */}
-            <div className="flex items-center gap-3 leading-none">
-              {score ? (
-                <span
-                  className={cn(
-                    "font-display font-black text-2xl tabular-nums tracking-tight w-8 text-right",
-                    aWins ? "text-win" : "text-loss",
+            {demo.teamA && demo.teamB ? (
+              /* Clear per-team layout: map label + a score line per team. */
+              <>
+                <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground/80 mb-1 truncate">
+                  {capitalizeMap(demo.map)}
+                </div>
+                <ScoreLine score={score?.[0]} name={demo.teamA} win={!!aWins} />
+                <ScoreLine score={score?.[1]} name={demo.teamB} win={!!bWins} className="mt-1" />
+              </>
+            ) : (
+              /* Legacy demos without clan names: keep the old map+filename rows. */
+              <>
+                <div className="flex items-center gap-3 leading-none">
+                  {score ? (
+                    <span className={cn("font-display font-black text-2xl tabular-nums tracking-tight w-8 text-right", aWins ? "text-win" : "text-loss")}>
+                      {score[0]}
+                    </span>
+                  ) : (
+                    <span className="font-display font-black text-2xl text-muted-foreground/40 w-8 text-right">—</span>
                   )}
-                >
-                  {score[0]}
-                </span>
-              ) : (
-                <span className="font-display font-black text-2xl text-muted-foreground/40 w-8 text-right">—</span>
-              )}
-              <span className="text-sm font-bold uppercase tracking-wide truncate">
-                {capitalizeMap(demo.map)}
-              </span>
-            </div>
-            {/* Score row 2 */}
-            <div className="flex items-center gap-3 leading-none mt-1.5">
-              {score ? (
-                <span
-                  className={cn(
-                    "font-display font-black text-2xl tabular-nums tracking-tight w-8 text-right",
-                    bWins ? "text-win" : "text-loss",
+                  <span className="text-sm font-bold uppercase tracking-wide truncate">{capitalizeMap(demo.map)}</span>
+                </div>
+                <div className="flex items-center gap-3 leading-none mt-1.5">
+                  {score ? (
+                    <span className={cn("font-display font-black text-2xl tabular-nums tracking-tight w-8 text-right", bWins ? "text-win" : "text-loss")}>
+                      {score[1]}
+                    </span>
+                  ) : (
+                    <span className="font-display font-black text-2xl text-muted-foreground/40 w-8 text-right">—</span>
                   )}
-                >
-                  {score[1]}
-                </span>
-              ) : (
-                <span className="font-display font-black text-2xl text-muted-foreground/40 w-8 text-right">—</span>
-              )}
-              <span className="text-sm font-semibold text-muted-foreground truncate">
-                {teamLabel(demo)}
-              </span>
-            </div>
+                  <span className="text-sm font-semibold text-muted-foreground truncate">{teamLabel(demo)}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -157,6 +155,36 @@ export function DemoCard({ demo, onDelete, deleting }: DemoCardProps) {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function ScoreLine({
+  score,
+  name,
+  win,
+  className,
+}: {
+  score?: number | null;
+  name: string;
+  win: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex items-center gap-3 leading-none", className)}>
+      {score != null ? (
+        <span
+          className={cn(
+            "font-display font-black text-2xl tabular-nums tracking-tight w-8 text-right",
+            win ? "text-win" : "text-loss",
+          )}
+        >
+          {score}
+        </span>
+      ) : (
+        <span className="font-display font-black text-2xl text-muted-foreground/40 w-8 text-right">—</span>
+      )}
+      <span className="text-sm font-semibold truncate">{name}</span>
     </div>
   );
 }

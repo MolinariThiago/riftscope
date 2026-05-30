@@ -194,7 +194,9 @@ export type TimelineEventType =
   | "bomb_defused"
   | "bomb_exploded"
   | "grenade_thrown"
-  | "shot";
+  | "shot"
+  | "weapon_drop"
+  | "weapon_pickup";
 
 export type GrenadeSubtype = "smoke" | "flash" | "he" | "molotov";
 
@@ -221,6 +223,11 @@ export interface TimelineEvent {
   // grenade
   subtype?: GrenadeSubtype;
   player?: string;
+  /** Thrower world position + look angles at the moment of the throw.
+   *  Used to generate the CS2 setpos/setang lineup command. */
+  throwerZ?: number;
+  throwerPitch?: number;
+  throwerYaw?: number;
   team?: Team;
   /**
    * For grenades: when the projectile DETONATES (smoke cloud appears,
@@ -258,6 +265,9 @@ export interface TimelineEvent {
    * Falls back to team-based inference when absent (older demos / stub parser).
    */
   weaponType?: "incgrenade" | "molotov";
+  // weapon_drop / weapon_pickup
+  picker?: string;
+  isGrenade?: boolean;
 }
 
 export interface RoundTimeline {

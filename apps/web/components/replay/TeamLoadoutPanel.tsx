@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import { Wrench } from "lucide-react";
 
@@ -580,6 +580,22 @@ function LoadoutRow({
         : safeCachedPrimary;
   const displayName = player.name || stats?.name || "—";
   const teamTextClass = team === "ct" ? "text-ct" : "text-tt";
+
+  // --- Setpos copy — always available while the player is alive ---
+  // Uses the player's current frame position (x, y, z) + yaw so you
+  // can paste it in CS2 and land exactly where they stood at this moment.
+  const [copied, setCopied] = useState(false);
+  const lineupCmd = player.alive && player.x != null && player.y != null
+    ? `setpos ${player.x} ${player.y} ${player.z ?? 0}; setang 0 ${player.yaw ?? 0}`
+    : null;
+
+  const copyLineup = () => {
+    if (!lineupCmd) return;
+    navigator.clipboard.writeText(lineupCmd).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  };
   // Monochrome feed (user spec): every text element renders white;
   // the HP bar is the ONE coloured signal, tinted by team — blue for
   // CT, orange for TT. The bar therefore tells you both "this player's
@@ -655,19 +671,27 @@ function LoadoutRow({
           />
         )}
 
-        {/* Line 1: NAME (left) + WEAPON silhouette (right). The
-            silhouette has no chip background — just the icon in
-            white, matching the user's mockup. */}
+        {/* Line 1: NAME (left) + WEAPON silhouette (right). */}
         <div className="flex items-center justify-between gap-2 min-w-0">
-          <span
+          <button
+            onClick={lineupCmd ? copyLineup : undefined}
             className={cn(
-              "font-bold uppercase tracking-wide text-[12px] truncate min-w-0 text-white",
+              "font-bold uppercase tracking-wide text-[12px] truncate min-w-0 text-left",
               dead && "line-through opacity-70",
+              lineupCmd && !copied && "text-white hover:text-primary transition-colors cursor-pointer",
+              copied && "text-[hsl(142_70%_60%)]",
+              !lineupCmd && "text-white cursor-default",
             )}
-            title={displayName}
+            title={
+              copied
+                ? "¡Copiado!"
+                : lineupCmd
+                  ? `${displayName} — Click para copiar lineup CS2`
+                  : displayName
+            }
           >
-            {displayName}
-          </span>
+            {copied ? "¡Copiado!" : displayName}
+          </button>
           {dead ? (
             <span className="text-white/80 text-[11px] font-bold">✕</span>
           ) : (

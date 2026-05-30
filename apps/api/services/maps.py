@@ -115,8 +115,8 @@ _MAPS: dict[str, MapMetadata] = {
         pos_x=-3230, pos_y=1713, scale=5.00,
         site_a=(150, -1900),
         site_b=(-1900, 0),
-        spawn_ct=(1230, 470),
-        spawn_tt=(-1750, -1340),
+        spawn_ct=(-1750, -1340),
+        spawn_tt=(1230, 470),
         callouts=[
             Callout("A site", 150, -1900, 260),
             Callout("Palace", 1100, -1700, 200),

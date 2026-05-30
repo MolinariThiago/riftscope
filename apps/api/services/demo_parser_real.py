@@ -263,6 +263,11 @@ class RealDemoParser:
         bomb_defused_df = _safe_event(parser, "bomb_defused")
         bomb_exploded_df = _safe_event(parser, "bomb_exploded")
 
+        # ---- Weapon floor pickups -------------------------------------------
+        # item_pickup(silent=False) = picked up from the FLOOR (not bought).
+        # Used to remove the dropped-weapon icon when someone picks it up.
+        item_pickup_df = _safe_event(parser, "item_pickup")
+
         plants_by_round = _index_by_round(bomb_planted_df, rounds)
         defuses_by_round = _index_by_round(bomb_defused_df, rounds)
         explodes_by_round = _index_by_round(bomb_exploded_df, rounds)
@@ -302,6 +307,14 @@ class RealDemoParser:
             # are handled by the cascading-prop fallback below, leaving
             # clans empty (team identity simply unknown for that demo).
             "team_clan_name",
+            # Vertical look angle — needed for setang (smoke-lineup command).
+            "pitch",
+            # Official per-team round counter (the real scoreboard). Lets us
+            # report the final score PER TEAM instead of tallying wins per
+            # side, which is wrong after the halftime swap (produces scores
+            # like "12-3" that map to no team). Best-effort: dropped by the
+            # cascading fallback on older demoparser2 builds.
+            "team_rounds_total",
             # ``inventory`` is a list-of-strings per player per tick
             # containing every weapon / grenade currently held. We
             # use it at the start of each round to seed the grenade
@@ -580,7 +593,9 @@ class RealDemoParser:
         # uses it. Canonical CS2 is {2:T, 3:CT}; FACEIT and a handful of
         # community servers ship demos with the opposite convention, so
         # we sniff the round-1 freeze-end spawn positions to decide.
-        team_num_to_side = _detect_team_orientation(ticks, rounds, map_name)
+        team_num_to_side = _detect_team_orientation(
+            ticks, rounds, map_name, bomb_planted_df=bomb_planted_df,
+        )
 
         # ---- Rebuild players_meta with the (now-verified) orientation ---
         # ``parse_player_info`` already populated players_meta with the
@@ -712,6 +727,7 @@ class RealDemoParser:
             explodes_by_round, loadouts_per_round, bomb_pos_by_round, tickrate,
             shots=shots,
             team_num_to_side=team_num_to_side,
+            item_pickup_df=item_pickup_df,
         )
 
         # Team names: A = the clan that started on CT, B = started on T.
@@ -724,14 +740,31 @@ class RealDemoParser:
                     counts[clan] = counts.get(clan, 0) + 1
             return max(counts, key=counts.get) if counts else None
 
+        team_a = _mode_clan("ct")
+        team_b = _mode_clan("tt")
+        # Final score PER TEAM from the game's own counter, NOT a per-side
+        # tally. After the halftime swap "rounds won by CT" belong to a
+        # different team in each half, so summing per side gives impossible
+        # scores like 12-3. team_rounds_total is the official scoreboard and
+        # already accounts for the swap + overtime.
+        score_by_clan = self._final_score_by_clan(ticks)
+        score_a = score_by_clan.get(team_a) if team_a else None
+        score_b = score_by_clan.get(team_b) if team_b else None
+        if score_a is None or score_b is None:
+            # Counter unavailable (older demoparser2) — fall back to the
+            # per-side tally so we still surface something.
+            score_a, score_b = ct_score, tt_score
+        total_rounds = (score_a + score_b) if (score_a + score_b) > 0 else len(rounds)
+
         meta = {
             "map": map_name,
             "tickrate": tickrate,
             "durationSeconds": sum(r["durationSeconds"] for r in rounds),
-            "roundCount": len(rounds),
-            "score": [ct_score, tt_score],
-            "teamA": _mode_clan("ct"),
-            "teamB": _mode_clan("tt"),
+            "roundCount": total_rounds,
+            "score": [score_a, score_b],         # PER TEAM: [teamA, teamB]
+            "scoreBySide": [ct_score, tt_score],  # legacy per-side tally (CT, T)
+            "teamA": team_a,
+            "teamB": team_b,
         }
 
         # Cleanup helpers — drop internals before returning rounds.
@@ -767,6 +800,38 @@ class RealDemoParser:
         median = spans[len(spans) // 2]
         # If median > 9000 ticks for what's typically a < 90s round → 128 tick
         return 128 if median > 9000 else 64
+
+    @staticmethod
+    def _final_score_by_clan(ticks) -> dict[str, int]:
+        """Official final score per clan, from ``team_rounds_total`` at the
+        last tick. Robust to the halftime side swap + overtime because it
+        reads the game's own scoreboard rather than tallying rounds per side.
+        Returns {} when the counter isn't available."""
+        try:
+            cols = getattr(ticks, "columns", [])
+            if ticks is None or "team_rounds_total" not in cols or "team_clan_name" not in cols:
+                return {}
+            last_tick = ticks["tick"].max()
+            sub = ticks[ticks["tick"] == last_tick][["team_clan_name", "team_rounds_total"]]
+            out: dict[str, int] = {}
+            for _, row in sub.iterrows():
+                clan = row.get("team_clan_name")
+                if clan is None or _is_nan(clan):
+                    continue
+                clan = str(clan).strip()
+                if not clan or clan.lower() == "nan":
+                    continue
+                try:
+                    won = int(row.get("team_rounds_total"))
+                except (TypeError, ValueError):
+                    continue
+                # A clan spans 5 player rows at the last tick; they all carry
+                # the same team counter — keep the max defensively.
+                out[clan] = max(out.get(clan, 0), won)
+            return out
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("final score by clan failed: %s", exc)
+            return {}
 
     @staticmethod
     def _build_rounds(starts_df, ends_df) -> list[dict]:
@@ -956,41 +1021,26 @@ class RealDemoParser:
     @staticmethod
     def _trim_to_match_window(rounds: list[dict]) -> list[dict]:
         """
-        Truncate the round list at the first valid match end.
+        Keep every real round, in tick order, with a defensive hard cap.
 
-        MR12 (CS2 default): first to 13. If 12-12, OT goes MR3 with a
-        2-round lead. We accept either branch by walking the rolling score
-        and stopping the moment one side has 13+ AND a >=1 round margin
-        (which handles 13-X normal wins + every OT win). Anything after
-        the stopping point is warmup leakage / knife round / next half
-        of an unrelated match recorded into the same .dem.
+        This used to truncate at the first time a side reached 13 (the MR12
+        win condition). That was WRONG for scrim / training demos, which
+        deliberately keep playing past 13 to practice — it silently dropped
+        every round after the 13th (the user saw "1 round didn't load").
 
-        Returns a fresh list (1..N) so consumers don't need to know about
-        renumbering.
+        We no longer need that cut:
+          - warmup / knife / restart artifacts are already filtered upstream
+            in ``_build_rounds`` (no valid CT/T winner, or sub-3s duration);
+          - the match SCORE now comes from the game's ``team_rounds_total``
+            counter, not from tallying these rounds, so extra rounds can't
+            inflate it.
+
+        So we just renumber 1..N and cap at 60 to guard against a runaway /
+        corrupt demo (two matches concatenated into one .dem).
         """
         if not rounds:
             return rounds
-        ct = tt = 0
-        keep: list[dict] = []
-        # Normal-format cap: 24 rounds (12+12). OT adds up to 6 per OT;
-        # we hard-cap at 60 to defend against runaway demos.
-        for r in rounds:
-            keep.append(r)
-            if r["winner"] == "ct":
-                ct += 1
-            else:
-                tt += 1
-            # Plain regulation: someone hit 13 first.
-            if (ct >= 13 and ct > tt) or (tt >= 13 and tt > ct):
-                if ct + tt <= 24:
-                    break
-                # We're in OT; require >=2 round margin after 12-12 to
-                # call the match.
-                if abs(ct - tt) >= 2:
-                    break
-            if len(keep) >= 60:
-                break
-        # Renumber to 1..N so frontend "round R/N" displays look right.
+        keep = rounds[:60]
         for i, r in enumerate(keep, start=1):
             r["number"] = i
         return keep
@@ -1404,6 +1454,7 @@ class RealDemoParser:
                 trajectory_payload: list[dict] | None = None
                 throw_t: int | None = None
                 ent = row.get("entityid")
+                thrower_full: dict | None = None
                 if ent is not None:
                     try:
                         ent_int = int(ent)
@@ -1414,6 +1465,7 @@ class RealDemoParser:
                         throw_t = first_throw_tick.get(key)
                         if throw_t is not None:
                             thrower_pos = _lookup_position(ticks_df, throw_t, sid)
+                            thrower_full = _lookup_position_full(ticks_df, throw_t, sid)
                         # Convert trajectory ticks → seconds relative to round.
                         traj_pts = trajectory_by_key.get(key)
                         if traj_pts:
@@ -1457,6 +1509,11 @@ class RealDemoParser:
                     "y": landing_y,
                     "throwerX": _safe_int(thrower_pos[0]) if thrower_pos else None,
                     "throwerY": _safe_int(thrower_pos[1]) if thrower_pos else None,
+                    # Full thrower state at throw time — used by the CS2
+                    # lineup-copy feature: setpos X Y Z; setang pitch yaw
+                    "throwerZ": thrower_full["z"] if thrower_full else None,
+                    "throwerPitch": thrower_full["pitch"] if thrower_full else None,
+                    "throwerYaw": thrower_full["yaw"] if thrower_full else None,
                     "radius": _GRENADE_RADIUS[subtype],
                     # expiresAt: when the effect ends.
                     "expiresAt": round(
@@ -1542,6 +1599,7 @@ class RealDemoParser:
                     continue
                 start_tick = round_obj["startTick"]
                 team = players_meta.get(sid, {}).get("team", "ct")
+                thrower_full: dict | None = None
                 first_patch = grp["patches"][0]
                 landing_x = first_patch["x"]
                 landing_y = first_patch["y"]
@@ -1617,11 +1675,14 @@ class RealDemoParser:
                         ]
                     if throw_t is not None:
                         thrower_pos = _lookup_position(ticks_df, throw_t, sid)
+                        thrower_full = _lookup_position_full(ticks_df, throw_t, sid)
 
                 if thrower_pos is None:
                     thrower_pos = _lookup_position(
                         ticks_df, grp["first_tick"], sid,
                     )
+                    if thrower_full is None:
+                        thrower_full = _lookup_position_full(ticks_df, grp["first_tick"], sid)
 
                 if throw_t is not None:
                     throw_rel_t = max(0.0, (throw_t - start_tick) / tickrate)
@@ -1710,6 +1771,9 @@ class RealDemoParser:
                     "y": landing_y,
                     "throwerX": _safe_int(thrower_pos[0]) if thrower_pos else None,
                     "throwerY": _safe_int(thrower_pos[1]) if thrower_pos else None,
+                    "throwerZ": thrower_full["z"] if thrower_full else None,
+                    "throwerPitch": thrower_full["pitch"] if thrower_full else None,
+                    "throwerYaw": thrower_full["yaw"] if thrower_full else None,
                     "radius": _GRENADE_RADIUS["molotov"],
                     "expiresAt": round(
                         last_patch_rel_t + _GRENADE_DURATION["molotov"], 2,
@@ -1861,6 +1925,7 @@ class RealDemoParser:
         tickrate: int,
         shots: list[dict] | None = None,
         team_num_to_side: dict[int, str] | None = None,
+        item_pickup_df=None,
     ) -> dict[str, Any]:
         """Sample each round's tick data down to TIMELINE_FPS frames.
 
@@ -2012,6 +2077,16 @@ class RealDemoParser:
                 frames.append({"t": round(rel_t, 2), "players": fp_list})
 
             # ---- Events ----
+            # A player's side is constant within a round, so resolve it from
+            # THIS round's frames (per-tick team, already orientation-correct).
+            # The players[] summary side can't be used here: parse_player_info
+            # reports the END-of-demo side, which is inverted after halftime.
+            round_side: dict[str, str] = {}
+            for fr in frames:
+                for p in fr["players"]:
+                    if p.get("team"):
+                        round_side.setdefault(p["steamId"], p["team"])
+
             events: list[dict] = []
             for k in kills:
                 if k["round"] != rnum:
@@ -2022,6 +2097,8 @@ class RealDemoParser:
                     "type": "kill",
                     "killer": k["killer"],
                     "victim": k["victim"],
+                    # Killer's side IN THIS ROUND (survives the halftime swap).
+                    "team": round_side.get(k["killer"]),
                     "weapon": k["weapon"],
                     "headshot": k["headshot"],
                     "x": k["victimPos"][0],
@@ -2062,7 +2139,119 @@ class RealDemoParser:
                 })
 
             for ge in grenade_events.get(rnum, []):
+                # Fix team using per-round side (same fix as kills).
+                # grenade_events were built from players_meta["team"] which is
+                # the END-of-demo side — wrong after halftime. round_side is
+                # derived from this round's frames, so it's always correct.
+                sid = ge.get("player", "")
+                correct_side = round_side.get(sid)
+                if correct_side:
+                    ge = {**ge, "team": correct_side}
                 events.append(ge)
+
+            # ---- Weapon drops + floor pickups ----
+            # weapon_drop: emitted at the moment a player dies. Shows their
+            # primary weapon (and a grenade if they had one) on the floor.
+            # weapon_pickup: when someone picks up a floor item (silent=False).
+            for k in kills:
+                if k["round"] != rnum:
+                    continue
+                ktick = k["tick"]
+                victim_sid = k["victim"]
+                # Victim's last weapon = active_weapon_name at death tick.
+                # Look for the most recent non-null weapon in a small window.
+                vrows = ticks_df[
+                    (ticks_df["steamid"].astype(str) == str(victim_sid)) &
+                    (ticks_df["tick"] >= ktick - 10) &
+                    (ticks_df["tick"] <= ktick)
+                ]
+                weapon_name: str | None = None
+                if len(vrows) > 0 and "active_weapon_name" in vrows.columns:
+                    wvals = vrows["active_weapon_name"].dropna()
+                    if len(wvals):
+                        raw = str(wvals.iloc[-1]).strip()
+                        if raw and raw.lower() not in ("nan", "", "knife", "c4"):
+                            # Skip grenades as the primary weapon
+                            grenade_keywords = ("grenade", "flash", "smoke", "molotov",
+                                                "incendiary", "decoy", "firebomb")
+                            if not any(g in raw.lower() for g in grenade_keywords):
+                                weapon_name = raw
+                # Drop position = victim's position at death (already in victimPos)
+                vx = k["victimPos"][0] if k.get("victimPos") else 0.0
+                vy = k["victimPos"][1] if k.get("victimPos") else 0.0
+                rel_t = (ktick - start) / tickrate
+                if weapon_name:
+                    events.append({
+                        "t": round(rel_t, 2),
+                        "type": "weapon_drop",
+                        "weapon": weapon_name,
+                        "x": round(vx, 1),
+                        "y": round(vy, 1),
+                        "victim": victim_sid,
+                    })
+                # Grenade drop: check loadout for this round
+                loadout = (loadouts_per_round.get(rnum) or {}).get(victim_sid)
+                if loadout and isinstance(loadout, dict):
+                    grenades = loadout.get("grenades") or {}
+                    # Priority order: smoke, flash, molotov, he, decoy
+                    grenade_priority = ["smokegrenade", "flashbang", "molotov",
+                                        "incgrenade", "hegrenade", "decoy"]
+                    # Subtract thrown grenades
+                    thrown_map: dict[str, int] = {}
+                    for ge in grenade_events.get(rnum, []):
+                        if ge.get("player") != victim_sid:
+                            continue
+                        sub = ge.get("subtype", "")
+                        gkey = {
+                            "smoke": "smokegrenade", "flash": "flashbang",
+                            "molotov": "molotov", "he": "hegrenade",
+                        }.get(sub, sub)
+                        # Only count grenades thrown BEFORE death
+                        if ge.get("t", 999) < rel_t:
+                            thrown_map[gkey] = thrown_map.get(gkey, 0) + 1
+                    for gkey in grenade_priority:
+                        available = (grenades.get(gkey) or 0) - thrown_map.get(gkey, 0)
+                        if available > 0:
+                            events.append({
+                                "t": round(rel_t, 2) + 0.01,
+                                "type": "weapon_drop",
+                                "weapon": gkey,
+                                "x": round(vx + 12, 1),
+                                "y": round(vy + 12, 1),
+                                "victim": victim_sid,
+                                "isGrenade": True,
+                            })
+                            break
+
+            # Floor pickups — only emit when truly picked up from the FLOOR.
+            # silent=False fires at round start (spawn) AND post-round (next
+            # round's spawn leaks in via the extended endTick). We restrict
+            # to the actual PLAY window [playStartTick, playEndTick] so we
+            # don't pick up spawn events on either side.
+            if item_pickup_df is not None and len(item_pickup_df) > 0:
+                play_start_tick = r.get("playStartTick") or (start + 20 * tickrate)
+                play_end_tick = r.get("playEndTick") or end
+                floor = item_pickup_df[
+                    (item_pickup_df["tick"] >= play_start_tick) &
+                    (item_pickup_df["tick"] <= play_end_tick)
+                ]
+                if "silent" in floor.columns:
+                    floor = floor[floor["silent"] == False]
+                for _, pu in floor.iterrows():
+                    ptick = int(pu["tick"])
+                    item = str(pu.get("item", "")).strip()
+                    if not item or item.lower() in ("knife", "vest", "kevlar",
+                                                     "c4", "defuser", "taser",
+                                                     "nan", ""):
+                        continue
+                    picker_sid = str(pu.get("user_steamid", ""))
+                    rel_t = (ptick - start) / tickrate
+                    events.append({
+                        "t": round(rel_t, 2),
+                        "type": "weapon_pickup",
+                        "weapon": item,
+                        "picker": picker_sid,
+                    })
 
             # ---- Shots (per-bullet fire events) ----
             # Each weapon_fire becomes a tiny event with shooter
@@ -2156,6 +2345,36 @@ def _decode_site(code: Any) -> str | None:
     return None
 
 
+def _lookup_position_full(ticks_df, tick: int, steamid: str) -> dict | None:
+    """Return X, Y, Z, yaw, pitch for a player at (or near) a given tick.
+    Used for the CS2 setpos/setang lineup-copy feature."""
+    if not steamid or ticks_df is None or len(ticks_df) == 0:
+        return None
+    sid_str = str(steamid)
+    exact = ticks_df[(ticks_df["tick"] == tick) & (ticks_df["steamid"] == sid_str)]
+    if len(exact) > 0:
+        row = exact.iloc[0]
+    else:
+        nearby = ticks_df[
+            (ticks_df["steamid"] == sid_str)
+            & (ticks_df["tick"] >= tick - 64)
+            & (ticks_df["tick"] <= tick + 64)
+        ]
+        if len(nearby) == 0:
+            return None
+        row = nearby.iloc[(nearby["tick"] - tick).abs().argmin()]
+    def _f(col, default=0.0):
+        v = row.get(col)
+        try:
+            return round(float(v), 3) if v is not None and not _is_nan(v) else default
+        except (TypeError, ValueError):
+            return default
+    return {
+        "x": _f("X"), "y": _f("Y"), "z": _f("Z"),
+        "yaw": _f("yaw"), "pitch": _f("pitch"),
+    }
+
+
 def _lookup_position(ticks_df, tick: int, steamid: str) -> tuple[float, float] | None:
     """Find a player's (X, Y) at a given tick. Falls back to the nearest tick."""
     if not steamid or ticks_df is None or len(ticks_df) == 0:
@@ -2183,16 +2402,24 @@ def _lookup_position(ticks_df, tick: int, steamid: str) -> tuple[float, float] |
 
 def _detect_team_orientation(
     ticks_df, rounds: list[dict], map_name: str,
+    bomb_planted_df=None,
 ) -> dict[int, str]:
     """
     Decide whether ``team_num=2`` means T (canonical CS2) or CT (some
     FACEIT / community / 5v5 demos invert this) on THIS specific demo.
 
-    Strategy: two independent checks, take the consensus.
+    Strategy: try the strongest signal first, fall back as needed.
+
+      W. **Bomb planter** — only Terrorists can plant the C4, so the
+         planter's ``team_num`` IS the T team_num. 100% reliable when
+         a plant exists in the first half. Doesn't depend on any map
+         metadata, so it can't be fooled by stale spawn coordinates.
 
       A. **Spawn proximity** — at round 1's freeze-end + ~2 s, the team
          that's closer to the map's CT spawn IS the CT team. Needs the
-         map to be registered in services.maps; skipped otherwise.
+         map to be registered in services.maps; skipped otherwise. Stale
+         coords here led to a Mirage scrim being silently inverted —
+         hence the bomb-planter check above takes priority.
 
       B. **Round-1 survivor count** — round 1 always ends with one side
          having more living players than the other (or it ended in a
@@ -2206,6 +2433,51 @@ def _detect_team_orientation(
     if ticks_df is None or len(ticks_df) == 0 or not rounds:
         logger.info("Team orientation skipped: no ticks / no rounds.")
         return _TEAM_NUM_TO_SIDE
+
+    # ---------- Check W: bomb planter is definitively a Terrorist --------
+    # Pick the FIRST plant in the first half (regulation rounds 1..12) and
+    # look up the planter's team_num near the plant tick. Only Ts can plant,
+    # so that team_num IS the T team_num — no ambiguity, no map dependency.
+    weapons_verdict: dict[int, str] | None = None
+    if bomb_planted_df is not None and len(bomb_planted_df) > 0:
+        half1_cutoff = int(rounds[min(11, len(rounds) - 1)]["endTick"])
+        for _, row in bomb_planted_df.iterrows():
+            try:
+                plant_tick = int(row.get("tick"))
+            except (TypeError, ValueError):
+                continue
+            if plant_tick > half1_cutoff:
+                continue
+            sid = str(row.get("user_steamid") or "")
+            if not sid:
+                continue
+            near = ticks_df[
+                (ticks_df["tick"] >= plant_tick - 16)
+                & (ticks_df["tick"] <= plant_tick + 16)
+                & (ticks_df["steamid"].astype(str) == sid)
+            ]
+            if len(near) == 0:
+                continue
+            tn = _safe_int(near.iloc[0].get("team_num"))
+            if tn not in (2, 3):
+                continue
+            # tn is the planter's team — definitionally Terrorist.
+            weapons_verdict = {tn: "tt", (5 - tn): "ct"}
+            logger.info(
+                "Team detect: bomb planter sid=%s team_num=%d → T team_num=%d. Verdict: %s",
+                sid, tn, tn, weapons_verdict,
+            )
+            break
+    if weapons_verdict:
+        if weapons_verdict == _TEAM_NUM_TO_SIDE:
+            logger.info("Team orientation canonical (confirmed by bomb planter).")
+            return _TEAM_NUM_TO_SIDE
+        if weapons_verdict == _TEAM_NUM_TO_SIDE_FLIPPED:
+            logger.warning(
+                "Team orientation INVERTED (confirmed by bomb planter — overrides "
+                "spawn/survivor heuristics). Using flipped mapping {2:ct,3:tt}."
+            )
+            return _TEAM_NUM_TO_SIDE_FLIPPED
 
     # ---------- Check B: round 1 survivor count ----------
     # Easier to implement first and works for every map.

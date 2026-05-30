@@ -61,6 +61,11 @@ class Demo(Base):
     # Indexed so anti-strat queries can scope "all demos of team X" fast.
     team_a_name = Column(String, nullable=True, index=True)
     team_b_name = Column(String, nullable=True, index=True)
+    # Final score PER TEAM (team_a_name vs team_b_name), from the game's
+    # scoreboard (team_rounds_total). score_ct/score_tt above are the legacy
+    # per-SIDE tally, which is wrong after the halftime swap — prefer these.
+    score_a = Column(Integer, nullable=True)
+    score_b = Column(Integer, nullable=True)
 
     # Heavy parser output. Player/round/kill arrays are also normalized into
     # DemoPlayer/DemoRound/DemoKill, but the per-round 2D timeline (frames +
@@ -108,7 +113,11 @@ class Demo(Base):
             "tickrate": self.tick_rate,
             "durationSeconds": self.duration_seconds,
             "roundCount": self.round_count,
-            "score": [self.score_ct, self.score_tt] if self.score_ct is not None else None,
+            "score": (
+                [self.score_a, self.score_b]
+                if self.score_a is not None
+                else ([self.score_ct, self.score_tt] if self.score_ct is not None else None)
+            ),
             "teamA": self.team_a_name,
             "teamB": self.team_b_name,
         }

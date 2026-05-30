@@ -111,10 +111,16 @@ def _ensure_steam_columns() -> None:
     # Team identity (Phase 0): clan/team names on demos + demo_players.
     if "demos" in insp.get_table_names():
         existing_d = {col["name"] for col in insp.get_columns("demos")}
+        new_demo_cols = {
+            "team_a_name": "VARCHAR",
+            "team_b_name": "VARCHAR",
+            "score_a": "INTEGER",
+            "score_b": "INTEGER",
+        }
         with engine.begin() as conn:
-            for col_name in ("team_a_name", "team_b_name"):
+            for col_name, col_type in new_demo_cols.items():
                 if col_name not in existing_d:
-                    conn.execute(text(f"ALTER TABLE demos ADD COLUMN {col_name} VARCHAR"))
+                    conn.execute(text(f"ALTER TABLE demos ADD COLUMN {col_name} {col_type}"))
                     logger.info("migrated demos table: added %s", col_name)
     if "demo_players" in insp.get_table_names():
         existing_dp = {col["name"] for col in insp.get_columns("demo_players")}

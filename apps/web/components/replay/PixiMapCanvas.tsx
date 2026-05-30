@@ -215,6 +215,9 @@ export function PixiMapCanvas({
   // Bomb / C4 icon sprite — single instance, since at most one bomb is
   // planted at a time. Hidden when no bomb is on the ground.
   const bombSpriteRef = useRef<Sprite | null>(null);
+  // Dropped weapons + utilities on the floor — one sprite per active drop.
+  // Pooled by drop-event index so we don't churn sprites every frame.
+  const dropSpritePoolRef = useRef<Map<string, Sprite>>(new Map());
 
   const hasLowerLevel = !!mapMeta?.radarUrlLower;
   const [showLower, setShowLower] = useState(false);
@@ -361,6 +364,7 @@ export function PixiMapCanvas({
         smokeSpritePoolRef.current.clear();
         molotovSpritePoolRef.current.clear();
         nadeHeadSpritePoolRef.current.clear();
+        dropSpritePoolRef.current.clear();
         if (bombSpriteRef.current) {
           try { bombSpriteRef.current.destroy(); } catch { /* */ }
           bombSpriteRef.current = null;
@@ -1814,6 +1818,120 @@ export function PixiMapCanvas({
         nadeHeadSpritePoolRef.current.delete(key);
       }
     });
+
+    // -------------------------------------------------------------------
+    // Dropped weapons + grenades on the floor.
+    // Each weapon_drop event shows on the radar at the victim's death
+    // position until a matching weapon_pickup (or the round ends).
+    // -------------------------------------------------------------------
+    {
+      const drops: Array<{
+        key: string;
+        x: number;
+        y: number;
+        weapon: string;
+        isGrenade: boolean;
+      }> = [];
+      // Index past drops + pickups in this round so far
+      const dropEvents = pastEvents.filter(
+        (e) => e.type === "weapon_drop" && e.t <= currentTime,
+      );
+      const pickupEvents = pastEvents.filter(
+        (e) => e.type === "weapon_pickup" && e.t <= currentTime,
+      );
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const aliases: Record<string, string[]> = {
+        glock18: ["glock"],
+        usps: ["uspsilencer", "usp"],
+        deserteagle: ["deagle"],
+        m4a4: ["m4a1"],
+        m4a1s: ["m4a1silencer", "m4a1"],
+      };
+      const matches = (dropW: string, pickW: string) => {
+        const d = norm(dropW);
+        const p = norm(pickW);
+        if (!d || !p) return false;
+        if (d === p) return true;
+        if (d.includes(p) || p.includes(d)) return true;
+        return (aliases[d] ?? []).includes(p) || (aliases[p] ?? []).includes(d);
+      };
+      const consumed = new Set<number>();
+      const sortedPickups = [...pickupEvents].sort((a, b) => a.t - b.t);
+      for (const pu of sortedPickups) {
+        const idx = dropEvents.findIndex(
+          (d, i) =>
+            !consumed.has(i) &&
+            d.t <= pu.t &&
+            matches(d.weapon ?? "", pu.weapon ?? ""),
+        );
+        if (idx >= 0) consumed.add(idx);
+      }
+      dropEvents.forEach((e, i) => {
+        if (consumed.has(i)) return;
+        drops.push({
+          key: `${i}_${e.t}_${e.victim ?? ""}`,
+          x: e.x ?? 0,
+          y: e.y ?? 0,
+          weapon: e.weapon ?? "",
+          isGrenade: !!e.isGrenade,
+        });
+      });
+
+      // Map weapon name → texture (uses existing weapon/utility caches).
+      const resolveDropTexture = (
+        weaponName: string,
+        isGrenade: boolean,
+      ): Texture | null => {
+        const w = norm(weaponName);
+        if (isGrenade || /^(smoke|flash|he|molotov|incendiary|inc|decoy|hegren)/.test(w)) {
+          if (w.startsWith("smoke")) return getUtilityTexture("smokegrenade");
+          if (w.startsWith("flash")) return getUtilityTexture("flashbang");
+          if (w.startsWith("hegren") || w === "he") return getUtilityTexture("hegrenade");
+          if (w.startsWith("molotov")) return getUtilityTexture("molotov");
+          if (w.startsWith("inc") || w.startsWith("incendiary")) return getUtilityTexture("incgrenade");
+          if (w.startsWith("decoy")) return getUtilityTexture("decoy");
+        }
+        return getWeaponTexture(weaponName);
+      };
+
+      const drawnDropKeys = new Set<string>();
+      for (const d of drops) {
+        const pp = project(d.x, d.y);
+        let sprite = dropSpritePoolRef.current.get(d.key);
+        if (!sprite) {
+          sprite = new Sprite(Texture.EMPTY);
+          sprite.anchor.set(0.5, 0.5);
+          sprite.filters = [UTILITY_WHITE_OUT_FILTER];
+          dropSpritePoolRef.current.set(d.key, sprite);
+          ls.killLines.addChild(sprite);
+        }
+        drawnDropKeys.add(d.key);
+        const tex = resolveDropTexture(d.weapon, d.isGrenade);
+        if (tex) {
+          sprite.texture = tex;
+          const target = d.isGrenade ? 14 : 22;
+          const fit = Math.min(
+            target / Math.max(1, tex.width),
+            target / Math.max(1, tex.height),
+          );
+          sprite.scale.set(fit);
+          sprite.position.set(pp.cx, pp.cy);
+          sprite.tint = 0xffffff;
+          sprite.alpha = 0.85;
+          sprite.visible = true;
+        } else {
+          sprite.visible = false;
+        }
+      }
+      // Sweep stale drops
+      dropSpritePoolRef.current.forEach((sprite, key) => {
+        if (!drawnDropKeys.has(key)) {
+          sprite.removeFromParent();
+          sprite.destroy();
+          dropSpritePoolRef.current.delete(key);
+        }
+      });
+    }
 
     // Players — diff against existing nodes; reuse where possible
     const seen = new Set<string>();

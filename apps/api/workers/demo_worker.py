@@ -468,10 +468,12 @@ async def process_demo(demo_id: int, file_path: str) -> None:
             tick_rate=meta["tickrate"],
             duration_seconds=meta["durationSeconds"],
             round_count=meta["roundCount"],
-            score_ct=meta["score"][0],
-            score_tt=meta["score"][1],
+            score_ct=(meta.get("scoreBySide") or meta["score"])[0],
+            score_tt=(meta.get("scoreBySide") or meta["score"])[1],
             team_a_name=meta.get("teamA"),
             team_b_name=meta.get("teamB"),
+            score_a=meta["score"][0],
+            score_b=meta["score"][1],
             analysis_data=analysis,
         )
         _persist_normalized(demo_id, analysis)

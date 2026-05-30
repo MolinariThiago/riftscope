@@ -225,6 +225,45 @@ export function MapCanvas({
     [pastEvents, currentTime],
   );
 
+  // Dropped weapons on the floor — show from death until picked up or round ends.
+  // Each pickup can "consume" at most one drop (closest in time) so spawning
+  // pistols / multiple drops of the same weapon are tracked correctly.
+  const droppedWeapons = useMemo(() => {
+    const drops = pastEvents
+      .filter((e) => e.type === "weapon_drop" && e.t <= currentTime)
+      .map((e, i) => ({ ...e, _idx: i, _consumed: false }));
+    const pickups = pastEvents.filter(
+      (e) => e.type === "weapon_pickup" && e.t <= currentTime,
+    );
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const weaponMatches = (dropW: string, pickW: string) => {
+      const d = norm(dropW);
+      const p = norm(pickW);
+      if (!d || !p) return false;
+      // Glock-18 ↔ glock, USP-S ↔ usp_silencer, AK-47 ↔ ak47, etc.
+      if (d === p) return true;
+      if (d.includes(p) || p.includes(d)) return true;
+      // Specific aliases
+      const aliases: Record<string, string[]> = {
+        glock18: ["glock"],
+        usps: ["uspsilencer", "usp"],
+        m4a4: ["m4a1"],
+        m4a1s: ["m4a1silencer", "m4a1"],
+        deserteagle: ["deagle"],
+      };
+      return (aliases[d] ?? []).includes(p) || (aliases[p] ?? []).includes(d);
+    };
+    // Consume drops greedily by pickups (sorted by time)
+    const sortedPickups = [...pickups].sort((a, b) => a.t - b.t);
+    for (const pu of sortedPickups) {
+      const match = drops.find(
+        (d) => !d._consumed && d.t <= pu.t && weaponMatches(d.weapon ?? "", pu.weapon ?? ""),
+      );
+      if (match) match._consumed = true;
+    }
+    return drops.filter((d) => !d._consumed);
+  }, [pastEvents, currentTime]);
+
   // Recent flash / he pops — show a brief ring at impact
   const recentPops = useMemo(() => {
     const FADE = 1.4;
@@ -615,6 +654,21 @@ export function MapCanvas({
               />
             );
           })}
+
+        {/* Dropped weapons on the floor */}
+        {droppedWeapons.map((d, i) => {
+          const { cx, cy } = project(d.x ?? 0, d.y ?? 0);
+          return (
+            <DroppedWeapon
+              key={`drop-${i}`}
+              cx={cx}
+              cy={cy}
+              weapon={d.weapon ?? ""}
+              isGrenade={!!d.isGrenade}
+              size={Math.max(10, projectScalar(55))}
+            />
+          );
+        })}
 
         {/* Players */}
         {frame?.players.map((p) => {
@@ -1026,6 +1080,112 @@ function GrenadeArea({
     );
   }
   return null;
+}
+
+// Weapon icons served from /public/weapons/ — same assets as the HUD.
+const WEAPON_ICON_MAP: Record<string, string> = {
+  smokegrenade: "/weapons/smokegrenade.webp",
+  flashbang:    "/weapons/flashbang.webp",
+  hegrenade:    "/weapons/hegrenade.svg",
+  molotov:      "/weapons/molotov.svg",
+  incgrenade:   "/weapons/incgrenade.webp",
+  decoy:        "/weapons/decoy.svg",
+};
+
+function resolveDropIcon(weapon: string): string | null {
+  const w = weapon.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // Grenade aliases
+  if (w.startsWith("smoke")) return WEAPON_ICON_MAP.smokegrenade;
+  if (w.startsWith("flash")) return WEAPON_ICON_MAP.flashbang;
+  if (w.includes("hegren") || w === "he") return WEAPON_ICON_MAP.hegrenade;
+  if (w.startsWith("molotov")) return WEAPON_ICON_MAP.molotov;
+  if (w.startsWith("inc") || w.startsWith("incendiary")) return WEAPON_ICON_MAP.incgrenade;
+  if (w.startsWith("decoy")) return WEAPON_ICON_MAP.decoy;
+  // Real weapons: use the existing path pattern from weaponIcons.ts
+  // (files are named by lowercase engine name, e.g. ak47.svg, awp.svg)
+  const engineNames: Record<string, string> = {
+    "ak47": "ak47", "ak-47": "ak47",
+    "m4a1silencer": "m4a1_silencer", "m4a1": "m4a1",
+    "awp": "awp",
+    "deagle": "deagle", "deserteagle": "deagle",
+    "glock": "glock", "glock18": "glock",
+    "uspsilencer": "usp_silencer", "usp": "usp_silencer",
+    "p2000": "p2000",
+    "p250": "p250",
+    "fiveseven": "fiveseven",
+    "tec9": "tec9",
+    "cz75a": "cz75a",
+    "famas": "famas", "galilar": "galilar",
+    "sg556": "sg556", "aug": "aug",
+    "mac10": "mac10", "mp9": "mp9", "mp7": "mp7",
+    "mp5sd": "mp5sd", "ump45": "ump45", "p90": "p90",
+    "nova": "nova", "mag7": "mag7", "xm1014": "xm1014",
+    "ssg08": "ssg08", "scar20": "scar20", "g3sg1": "g3sg1",
+  };
+  for (const [k, v] of Object.entries(engineNames)) {
+    if (w.includes(k)) return `/weapons/${v}.svg`;
+  }
+  return null;
+}
+
+function DroppedWeapon({
+  cx, cy, weapon, isGrenade, size,
+}: {
+  cx: number; cy: number; weapon: string; isGrenade: boolean; size: number;
+}) {
+  const iconUrl = resolveDropIcon(weapon);
+  const half = size / 2;
+  if (!iconUrl) {
+    // Fallback: simple white dot with weapon initial
+    const label = weapon.replace(/[^a-zA-Z0-9]/g, "").slice(0, 3).toUpperCase();
+    return (
+      <g style={{ pointerEvents: "none" }}>
+        <rect
+          x={cx - half} y={cy - half / 2}
+          width={size} height={size * 0.6}
+          rx={3} ry={3}
+          fill="hsl(220 16% 12% / 0.85)"
+          stroke="hsl(0 0% 60%)"
+          strokeWidth={1}
+        />
+        <text x={cx} y={cy + 2} textAnchor="middle" fontSize={Math.max(7, size * 0.35)}
+          fill="hsl(0 0% 90%)" fontWeight="700">
+          {label}
+        </text>
+      </g>
+    );
+  }
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      {/* Dark pill background */}
+      <rect
+        x={cx - half - 2} y={cy - half / 2 - 2}
+        width={size + 4} height={size * 0.65 + 4}
+        rx={4} ry={4}
+        fill="hsl(220 16% 8% / 0.80)"
+        stroke={isGrenade ? "hsl(50 80% 50% / 0.6)" : "hsl(0 0% 50% / 0.5)"}
+        strokeWidth={1}
+      />
+      {/* Use foreignObject to embed the img — stays crisp at any zoom */}
+      <foreignObject x={cx - half} y={cy - half / 2} width={size} height={size * 0.6}>
+        {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
+        {/* @ts-ignore — xmlns required for SVG foreignObject */}
+        <div xmlns="http://www.w3.org/1999/xhtml"
+          style={{ width: "100%", height: "100%", display: "flex",
+            alignItems: "center", justifyContent: "center" }}>
+          <img
+            src={iconUrl}
+            alt={weapon}
+            style={{
+              maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+              filter: "brightness(0) invert(1)",
+              opacity: 0.9,
+            }}
+          />
+        </div>
+      </foreignObject>
+    </g>
+  );
 }
 
 function PopRing({

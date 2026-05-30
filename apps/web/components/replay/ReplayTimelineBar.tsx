@@ -1,16 +1,15 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Camera,
-  Cloud,
-  Headphones,
+  ChevronLeft,
+  ChevronRight,
   Pause,
   Pencil,
   Play,
   Settings as Gear,
   Star,
-  Timer,
   Trash2,
 } from "lucide-react";
 
@@ -36,32 +35,16 @@ interface ReplayTimelineBarProps {
   duration: number;
   events: TimelineEvent[];
 
-  /** Resolves steamId -> display name / team. Used for avatar tooltips. */
   playerLookup: Map<string, PlayerStats>;
   onHover?: (steamId: string | null) => void;
 
-  /** Optional — wire these to actual handlers as they ship. */
   onToggleLayers?: () => void;
   onBookmark?: () => void;
-  /** Whether the user is currently in freehand-draw mode. */
   drawingMode?: boolean;
-  /** Toggle drawing mode (pencil tool on/off). */
   onToggleDrawing?: () => void;
-  /** Clear every stroke the user has drawn on top of the map. */
   onClearDrawings?: () => void;
 }
 
-/**
- * CS2.CAM-style unified bottom bar — round strip + integrated event timeline
- * + side toolbars. Rounds are always visible (flex-1, never scroll), events
- * render on the timeline with the killer/thrower avatar at the base.
- *
- *   ┌─────────┬────────────────────────────────────────┬─────────┐
- *   │ Notas   │  Round strip (1..N, color = winner)    │ ✏ 🗑    │
- *   │ 😎 75   │  Event timeline (scrubber + lanes)     │ 🎧 ⏱    │
- *   │ ⏵ play  │  ▲ utility · ❘ kill bar · ● bomb        │ ⚙ ⭐ 📹  │
- *   └─────────┴────────────────────────────────────────┴─────────┘
- */
 export function ReplayTimelineBar({
   rounds,
   currentRound,
@@ -78,112 +61,141 @@ export function ReplayTimelineBar({
   onToggleDrawing,
   onClearDrawings,
 }: ReplayTimelineBarProps) {
-  const halfPoint = Math.floor(rounds.length / 2);
+  const halfPoint = Math.ceil(rounds.length / 2);
+  const currentIdx = rounds.findIndex((r) => r.number === currentRound);
+
+  const goPrev = () => {
+    if (currentIdx > 0) onRoundChange(rounds[currentIdx - 1].number);
+  };
+  const goNext = () => {
+    if (currentIdx < rounds.length - 1) onRoundChange(rounds[currentIdx + 1].number);
+  };
 
   return (
-    <div className="flex items-stretch bg-surface/80 backdrop-blur-md border-t border-border/50">
-      {/* ============================================================
-          LEFT TOOLS — Notas, emojis, play/pause
-          More compact stack so the bar gives the map more space.
-          ============================================================ */}
-      <div className="flex flex-col items-stretch gap-1 px-2 py-1 border-r border-border/40 min-w-[108px]">
+    <div className="flex flex-col bg-[hsl(220_16%_8%/0.35)] backdrop-blur-md border-t border-border/30">
+      {/* ====== Row 1: Round strip ====== */}
+      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border/30">
         <button
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold text-muted-foreground hover:text-foreground hover:bg-surface-elevated transition-colors"
-          title="Notes (coming soon)"
+          onClick={goPrev}
+          disabled={currentIdx <= 0}
+          className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
         >
-          <Cloud size={10} />
-          Notas
+          <ChevronLeft size={14} />
         </button>
-        <div className="flex items-center gap-1">
-          <EmojiBadge emoji="🤓" count={rounds.length} />
-          <EmojiBadge emoji="🥶" count={Math.max(0, events.filter((e) => e.type === "kill").length)} />
-        </div>
-        <button
-          onClick={controls.toggle}
-          className="inline-flex items-center justify-center h-6 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-md shadow-primary/20"
-          title={state.playing ? "Pause" : "Play"}
-        >
-          {state.playing ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" className="ml-0.5" />}
-        </button>
-      </div>
 
-      {/* ============================================================
-          CENTER — Round strip on top, event timeline below
-          ============================================================ */}
-      <div className="flex-1 min-w-0 flex flex-col px-2 py-1 gap-1">
-        {/* Round strip */}
-        <div className="flex items-center gap-[2px] w-full">
+        <div className="flex-1 flex items-center justify-center gap-[3px]">
           {rounds.map((r, idx) => {
             const active = r.number === currentRound;
             const ctWon = r.winner === "ct";
-            const showHalfBreak = idx === halfPoint && idx > 0;
+            const isHalf = idx === halfPoint;
             return (
-              <div key={r.number} className="flex items-center flex-1 min-w-0">
-                {showHalfBreak && (
-                  <div className="self-stretch w-px bg-border/60 mx-1" aria-hidden />
+              <div key={r.number} className="contents">
+                {isHalf && (
+                  <div className="w-[2px] self-stretch mx-0.5 rounded-full bg-border/50" />
                 )}
-                <RoundCell round={r} active={active} ctWon={ctWon} onSelect={onRoundChange} />
+                <button
+                  onClick={() => onRoundChange(r.number)}
+                  className={cn(
+                    "relative w-7 h-7 flex items-center justify-center rounded transition-all text-[11px] font-mono-rs tabular-nums",
+                    active
+                      ? "bg-primary text-primary-foreground font-bold shadow-md shadow-primary/30"
+                      : "text-muted-foreground hover:text-foreground hover:bg-surface-elevated/60",
+                  )}
+                  title={`Round ${r.number} — ${r.winner.toUpperCase()} (${r.endReason})`}
+                >
+                  {r.number}
+                  {/* Winner color bar at the bottom */}
+                  <span
+                    className={cn(
+                      "absolute bottom-0 inset-x-1 h-[2.5px] rounded-full",
+                      active ? "opacity-0" : "opacity-90",
+                    )}
+                    style={{
+                      background: ctWon
+                        ? "hsl(213 100% 62%)"
+                        : "hsl(33 100% 60%)",
+                    }}
+                  />
+                </button>
               </div>
             );
           })}
         </div>
 
-        {/* Event timeline (scrubber + utility/kill markers + avatars) */}
-        <EventTimeline
-          time={state.time}
-          duration={duration}
-          events={events}
-          onSeek={controls.seek}
-          playerLookup={playerLookup}
-          onHover={onHover}
-        />
+        <button
+          onClick={goNext}
+          disabled={currentIdx >= rounds.length - 1}
+          className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
 
-        {/* Time + speed — single tight row */}
-        <div className="flex items-center justify-between gap-2 px-1">
-          <div className="flex items-center gap-1.5 font-mono-rs text-[10px]">
-            <span className="text-foreground tabular-nums">{formatTime(state.time)}</span>
-            <span className="text-muted-foreground">/</span>
-            <span className="text-muted-foreground tabular-nums">{formatTime(duration)}</span>
-          </div>
+      {/* ====== Row 2: Playback controls + event timeline + tools ====== */}
+      <div className="flex items-center gap-2 px-2 py-1.5">
+        {/* Play / speed / time */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <button
+            onClick={controls.toggle}
+            className="w-8 h-8 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 flex items-center justify-center transition-colors"
+            title={state.playing ? "Pause" : "Play"}
+          >
+            {state.playing ? (
+              <Pause size={14} fill="currentColor" />
+            ) : (
+              <Play size={14} fill="currentColor" className="ml-0.5" />
+            )}
+          </button>
+
           <div className="flex items-center gap-0.5">
             {[0.5, 1, 2, 4].map((s) => (
               <button
                 key={s}
                 onClick={() => controls.setSpeed(s as 0.5 | 1 | 2 | 4)}
                 className={cn(
-                  "px-1.5 py-0 rounded text-[10px] font-mono-rs transition-colors",
+                  "px-1 py-0.5 rounded text-[10px] font-mono-rs transition-colors",
                   state.speed === s
-                    ? "bg-primary-dim text-primary"
-                    : "text-muted-foreground hover:text-foreground",
+                    ? "bg-primary-dim text-primary font-bold"
+                    : "text-muted-foreground/60 hover:text-muted-foreground",
                 )}
               >
                 {s}x
               </button>
             ))}
           </div>
-        </div>
-      </div>
 
-      {/* ============================================================
-          RIGHT TOOLS — annotation + utility actions
-          ============================================================ */}
-      <div className="flex items-center gap-0.5 px-1.5 py-1 border-l border-border/40">
-        <ToolBtn
-          icon={Pencil}
-          title={drawingMode ? "Exit drawing mode" : "Drawing mode (freehand annotation on the map)"}
-          active={drawingMode}
-          onClick={onToggleDrawing}
-        />
-        <ToolBtn
-          icon={Trash2}
-          title="Clear annotations"
-          onClick={onClearDrawings}
-        />
-        <ToolBtn icon={Headphones} title="Demo audio (coming soon)" />
-        <ToolBtn icon={Timer} title="Jump to time (coming soon)" />
-        <ToolBtn icon={Gear} title="Layers / settings" onClick={onToggleLayers} />
-        <ToolBtn icon={Star} title="Save this round to your Playbook" onClick={onBookmark} />
-        <ToolBtn icon={Camera} title="Export clip (coming soon)" />
+          <div className="font-mono-rs text-[11px] text-muted-foreground tabular-nums ml-1 min-w-[68px]">
+            <span className="text-foreground">{formatTime(state.time)}</span>
+            <span className="mx-0.5 opacity-50">/</span>
+            <span>{formatTime(duration)}</span>
+          </div>
+        </div>
+
+        {/* Event timeline */}
+        <div className="flex-1 min-w-0">
+          <EventTimeline
+            time={state.time}
+            duration={duration}
+            events={events}
+            onSeek={controls.seek}
+            playerLookup={playerLookup}
+            onHover={onHover}
+          />
+        </div>
+
+        {/* Right tools */}
+        <div className="flex items-center gap-0.5 flex-shrink-0">
+          <ToolBtn
+            icon={Pencil}
+            title={drawingMode ? "Exit drawing" : "Draw"}
+            active={drawingMode}
+            onClick={onToggleDrawing}
+          />
+          <ToolBtn icon={Trash2} title="Clear drawings" onClick={onClearDrawings} />
+          <ToolBtn icon={Gear} title="Layers" onClick={onToggleLayers} />
+          <ToolBtn icon={Star} title="Save round" onClick={onBookmark} />
+          <ToolBtn icon={Camera} title="Screenshot" />
+        </div>
       </div>
     </div>
   );
@@ -220,75 +232,33 @@ function ToolBtn({
   );
 }
 
-function EmojiBadge({ emoji, count }: { emoji: string; count: number }) {
-  return (
-    <div
-      className="inline-flex items-center justify-center h-6 w-7 rounded-full bg-surface-elevated border border-border/40 text-[12px] leading-none cursor-default"
-      title={`${count}`}
-    >
-      <span className="-translate-y-px">{emoji}</span>
-    </div>
-  );
-}
-
-function RoundCell({
-  round: r,
-  active,
-  ctWon,
-  onSelect,
-}: {
-  round: Round;
-  active: boolean;
-  ctWon: boolean;
-  onSelect: (n: number) => void;
-}) {
-  return (
-    <button
-      onClick={() => onSelect(r.number)}
-      className={cn(
-        "relative flex-1 h-5 min-w-0 flex items-center justify-center rounded-sm font-mono-rs",
-        "transition-all duration-150 group",
-        // Active round uses the brand primary as a subtle background
-        // tint plus a stronger text colour — replaces the generic
-        // "white on grey" highlight so the active state ties into
-        // the rest of the brand-accented UI (focused player row,
-        // play button, etc.).
-        active
-          ? "bg-primary/15 text-primary font-bold ring-1 ring-primary/40"
-          : "text-muted-foreground hover:bg-surface-elevated/60 hover:text-foreground",
-      )}
-      title={`Round ${r.number} — ${r.winner.toUpperCase()} ${r.endReason}${r.bombPlanted ? ` · bomb ${r.bombSite}` : ""}`}
-    >
-      <span className="text-[11px] tabular-nums leading-none">{r.number}</span>
-      {/* underline shows the winner */}
-      <span
-        className={cn(
-          "absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] rounded-full transition-all",
-          active ? "w-full" : "w-3/4",
-          ctWon ? "bg-ct" : "bg-tt",
-          active ? "opacity-100" : "opacity-80",
-        )}
-      />
-      {r.bombPlanted && (
-        <span
-          className="absolute top-0.5 right-0.5 w-1 h-1 rounded-full bg-loss"
-          title={`Bomb planted on ${r.bombSite ?? "?"}`}
-        />
-      )}
-    </button>
-  );
-}
-
 // =========================================================================
-// Event timeline — scrubber + utility triangles + kill bars + avatars
+// Event timeline — scrubber + kill bars (top) + utility triangles (bottom)
 // =========================================================================
 
-const GRENADE_COLOR: Record<GrenadeSubtype, string> = {
-  smoke: "hsl(220 8% 80%)",
-  flash: "hsl(50 100% 65%)",
-  he: "hsl(15 90% 55%)",
-  molotov: "hsl(20 95% 60%)",
+// Weapon silhouettes used as CSS masks — the shape is taken from the image,
+// the color comes entirely from background-color (team color), so the
+// original image color (black/white/grey) never matters.
+const GRENADE_IMG: Record<GrenadeSubtype, string> = {
+  smoke:   "/weapons/smokegrenade.webp",
+  flash:   "/weapons/flashbang.webp",
+  he:      "/weapons/hegrenade.svg",
+  molotov: "/weapons/molotov.svg",
 };
+
+const CT_COLOR  = "hsl(213 100% 62%)";
+const TT_COLOR  = "hsl(33  100% 60%)";
+
+/** Build the CS2 lineup command from a grenade throw event. */
+function buildLineupCmd(e: TimelineEvent): string | null {
+  const x = e.throwerX;
+  const y = e.throwerY;
+  const z = e.throwerZ;
+  const pitch = e.throwerPitch;
+  const yaw = e.throwerYaw;
+  if (x == null || y == null || z == null || pitch == null || yaw == null) return null;
+  return `setpos ${x} ${y} ${z}; setang ${pitch} ${yaw}`;
+}
 
 function EventTimeline({
   time,
@@ -306,6 +276,16 @@ function EventTimeline({
   onHover?: (steamId: string | null) => void;
 }) {
   const pct = duration > 0 ? (time / duration) * 100 : 0;
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+
+  const handleUtilClick = (e: TimelineEvent, i: number) => {
+    const cmd = buildLineupCmd(e);
+    if (!cmd) return;
+    navigator.clipboard.writeText(cmd).then(() => {
+      setCopiedIdx(i);
+      setTimeout(() => setCopiedIdx(null), 1800);
+    });
+  };
 
   const { utilities, kills, bombs } = useMemo(() => {
     const utilities: TimelineEvent[] = [];
@@ -326,114 +306,133 @@ function EventTimeline({
   }, [events]);
 
   return (
-    <div className="relative h-12 group">
-      {/* Track background */}
-      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-surface/70" />
+    <div className="relative h-9 group rounded-lg bg-surface/40">
+      {/* Track */}
+      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[3px] rounded-full bg-border/30" />
 
-      {/* Played portion */}
+      {/* Played */}
       <div
-        className="absolute top-1/2 -translate-y-1/2 h-1 rounded-full bg-gradient-to-r from-primary/80 to-primary"
+        className="absolute top-1/2 -translate-y-1/2 h-[3px] rounded-full bg-primary/70"
         style={{ width: `${pct}%` }}
       />
 
-      {/* Tick marks every 10% — subtle */}
-      {[10, 20, 30, 40, 50, 60, 70, 80, 90].map((p) => (
-        <div
-          key={p}
-          className="absolute top-1/2 -translate-y-1/2 w-px h-3 bg-border/50"
-          style={{ left: `${p}%` }}
-          aria-hidden
-        />
-      ))}
-
-      {/* Kill bars (TOP HALF — above the track) */}
+      {/* Kill bars — above center line */}
       {kills.map((e, i) => {
         if (duration === 0) return null;
         const left = (e.t / duration) * 100;
         const past = e.t <= time;
-        const team = playerLookup.get(e.killer ?? "")?.team;
-        const color = team === "ct" ? "hsl(213 100% 65%)" : team === "tt" ? "hsl(33 100% 64%)" : "hsl(350 80% 60%)";
-        const headshot = e.headshot;
+        // Prefer the per-round side baked into the event (correct across the
+        // halftime swap); fall back to the summary team for older demos.
+        const team = e.team ?? playerLookup.get(e.killer ?? "")?.team;
+        const isCt = team === "ct";
+        const color = isCt ? "hsl(213 100% 62%)" : "hsl(33 100% 60%)";
         return (
           <div
             key={`k-${i}`}
-            className="absolute -translate-x-1/2 top-0 flex flex-col items-center"
-            style={{ left: `${left}%` }}
+            className="absolute -translate-x-1/2 flex flex-col items-center"
+            style={{ left: `${left}%`, bottom: "50%", opacity: past ? 1 : 0.4 }}
             onMouseEnter={() => e.killer && onHover?.(e.killer)}
             onMouseLeave={() => onHover?.(null)}
           >
             <div
-              className={cn(
-                "w-[3px] rounded-sm shadow",
-                "transition-opacity",
-              )}
+              className="w-[2.5px] rounded-sm"
               style={{
                 background: color,
-                height: headshot ? "20px" : "16px",
-                opacity: past ? 1 : 0.55,
-                boxShadow: past ? `0 0 6px ${color}` : "none",
+                height: e.headshot ? "14px" : "10px",
+                boxShadow: past ? `0 0 4px ${color}` : "none",
               }}
-              title={`${formatTime(e.t)} · ${playerLookup.get(e.killer ?? "")?.name ?? "?"} → ${playerLookup.get(e.victim ?? "")?.name ?? "?"} (${e.weapon ?? "?"})${headshot ? " · HS" : ""}`}
+              title={`${formatTime(e.t)} · ${playerLookup.get(e.killer ?? "")?.name ?? "?"} → ${playerLookup.get(e.victim ?? "")?.name ?? "?"} (${e.weapon ?? "?"})${e.headshot ? " HS" : ""}`}
             />
           </div>
         );
       })}
 
-      {/* Utility markers (BOTTOM HALF — below the track) — triangle + avatar */}
+      {/* Utility icons — below center line, real CS2 weapon images */}
       {utilities.map((e, i) => {
         if (duration === 0) return null;
         const left = (e.t / duration) * 100;
         const subtype = (e.subtype ?? "smoke") as GrenadeSubtype;
-        const color = GRENADE_COLOR[subtype];
-        const player = playerLookup.get(e.player ?? "");
         const past = e.t <= time;
+        const player = playerLookup.get(e.player ?? "");
+        const thrower = player?.name ?? "?";
+        // e.team is now baked correctly by the parser (per-round side).
+        const isCt = (e.team ?? player?.team) === "ct";
+        const teamColor = isCt ? CT_COLOR : TT_COLOR;
+        const src = GRENADE_IMG[subtype] ?? GRENADE_IMG.he;
+        const cmd = buildLineupCmd(e);
+        const copied = copiedIdx === i;
         return (
           <div
             key={`u-${i}`}
-            className="absolute -translate-x-1/2 bottom-0 flex flex-col items-center"
-            style={{ left: `${left}%`, opacity: past ? 1 : 0.55 }}
+            className="absolute -translate-x-1/2"
+            style={{
+              left: `${left}%`,
+              top: "50%",
+              marginTop: "3px",
+            }}
             onMouseEnter={() => e.player && onHover?.(e.player)}
             onMouseLeave={() => onHover?.(null)}
           >
-            <Triangle color={color} />
-            {player && (
-              <PlayerDot
-                name={player.name}
-                team={player.team}
-              />
-            )}
+            <span
+              onClick={cmd ? () => handleUtilClick(e, i) : undefined}
+              style={{
+                display: "block",
+                width: 14,
+                height: 14,
+                backgroundColor: copied ? "hsl(142 70% 60%)" : teamColor,
+                WebkitMaskImage: `url(${src})`,
+                maskImage: `url(${src})`,
+                WebkitMaskSize: "contain",
+                maskSize: "contain",
+                WebkitMaskRepeat: "no-repeat",
+                maskRepeat: "no-repeat",
+                WebkitMaskPosition: "center",
+                maskPosition: "center",
+                opacity: past ? 1 : 0.45,
+                cursor: cmd ? "pointer" : "default",
+                transition: "background-color 0.2s",
+              }}
+              title={
+                copied
+                  ? "¡Copiado!"
+                  : cmd
+                    ? `${formatTime(e.t)} · ${subtype} · ${thrower}\nClick → copiar comando CS2`
+                    : `${formatTime(e.t)} · ${subtype} · ${thrower}`
+              }
+            />
           </div>
         );
       })}
 
-      {/* Bomb dots — center of track, larger ring */}
+      {/* Bomb events — on the center line */}
       {bombs.map((e, i) => {
         if (duration === 0) return null;
         const left = (e.t / duration) * 100;
-        const color = e.type === "bomb_defused"
-          ? "hsl(150 70% 55%)"
-          : e.type === "bomb_exploded"
-            ? "hsl(20 95% 55%)"
-            : "hsl(0 80% 55%)";
+        const color =
+          e.type === "bomb_defused"
+            ? "hsl(150 70% 55%)"
+            : e.type === "bomb_exploded"
+              ? "hsl(20 95% 55%)"
+              : "hsl(0 80% 55%)";
         return (
           <div
             key={`b-${i}`}
-            className="absolute -translate-x-1/2 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ring-2 ring-background z-10"
+            className="absolute -translate-x-1/2 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ring-[1.5px] ring-[hsl(220_16%_8%)] z-10"
             style={{ left: `${left}%`, background: color }}
             title={`${formatTime(e.t)} · ${e.type.replace("bomb_", "")}`}
           />
         );
       })}
 
-      {/* Playhead (vertical white line) */}
+      {/* Playhead */}
       <div
-        className="absolute top-0 bottom-0 w-px bg-foreground pointer-events-none z-20"
+        className="absolute top-0 bottom-0 w-px bg-foreground/80 pointer-events-none z-20"
         style={{ left: `${pct}%` }}
       >
-        <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-foreground" />
+        <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-foreground shadow-sm" />
       </div>
 
-      {/* Range slider for seeking */}
+      {/* Scrubber */}
       <input
         type="range"
         min={0}
@@ -441,47 +440,9 @@ function EventTimeline({
         step={0.05}
         value={time}
         onChange={(e) => onSeek(parseFloat(e.target.value))}
-        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer rs-scrubber z-30"
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
       />
     </div>
-  );
-}
-
-function Triangle({ color }: { color: string }) {
-  return (
-    <svg width="9" height="8" viewBox="0 0 9 8">
-      <polygon
-        points="4.5,0 0,7 9,7"
-        fill={color}
-        stroke="hsl(220 16% 6%)"
-        strokeWidth="0.6"
-      />
-    </svg>
-  );
-}
-
-function PlayerDot({ name, team }: { name: string; team: "ct" | "tt" }) {
-  const color = team === "ct" ? "hsl(213 100% 65%)" : "hsl(33 100% 64%)";
-  // First glyph from a name with possible emoji prefix — strip non-letter
-  // characters so the avatar reads as a normal initial.
-  const letter = (() => {
-    for (const ch of name) {
-      if (/[A-Za-z0-9]/.test(ch)) return ch.toUpperCase();
-    }
-    return "?";
-  })();
-  return (
-    <span
-      title={name}
-      className="mt-0.5 flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px] font-bold leading-none"
-      style={{
-        background: color,
-        color: "hsl(220 16% 8%)",
-        boxShadow: "0 0 0 1.5px hsl(220 16% 6%)",
-      }}
-    >
-      {letter}
-    </span>
   );
 }
 
