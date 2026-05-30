@@ -18,8 +18,13 @@ RUN apt-get update \
 WORKDIR /app
 
 # Install deps first so the image cache stays warm between code edits.
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements.txt = base (FastAPI, demoparser2, etc.)
+# requirements-prod.txt = Postgres drivers + Celery (pulled in unconditionally
+# in the prod image; no harm in dev since they're never imported when
+# DATABASE_URL=sqlite and QUEUE_BACKEND=inprocess).
+COPY requirements.txt requirements-prod.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+ && pip install --no-cache-dir -r requirements-prod.txt
 
 # Copy the app last — invalidates only the final layer on code change.
 COPY . .
@@ -29,10 +34,15 @@ COPY . .
 # the /storage/bin/unrar fallback path still uses this dir.
 RUN mkdir -p storage/uploads storage/bin
 
+# Railway / Fly / Render inject the listening port via $PORT. Default to
+# 8000 when running the image standalone.
+ENV PORT=8000
 EXPOSE 8000
 
 # uvicorn with a single worker — the in-process scheduler + asyncio
 # background tasks need a single event loop. When you scale up,
 # split the scheduler into a separate process (or migrate to Celery)
 # instead of running multiple workers here.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# ``sh -c`` is required so ${PORT} is expanded at runtime (exec form
+# doesn't shell-interpolate).
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
