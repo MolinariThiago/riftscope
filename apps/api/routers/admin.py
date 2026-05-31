@@ -109,12 +109,19 @@ def get_growth(
 
     granularity = "week" if days > 14 else "day"
 
-    # SQLite + Postgres both accept ``date(col)``. For weeks we bucket by
-    # the Monday of the week using strftime where available, else by
-    # date() — both supported on SQLite and Postgres via SQLAlchemy.
+    # Pick the date-bucketing function per dialect — strftime is SQLite-only;
+    # Postgres uses to_char(). Detecting by the active engine keeps the same
+    # endpoint working in both dev (SQLite) and prod (Postgres).
+    dialect_name = db.get_bind().dialect.name  # "sqlite" | "postgresql"
+    is_postgres = dialect_name.startswith("postgres")
+
     def bucket(col):
         if granularity == "week":
+            if is_postgres:
+                return func.to_char(col, "IYYY-IW")  # ISO year + week
             return func.strftime("%Y-%W", col)
+        if is_postgres:
+            return func.to_char(col, "YYYY-MM-DD")
         return func.strftime("%Y-%m-%d", col)
 
     users_rows = (
