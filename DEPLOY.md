@@ -67,6 +67,36 @@ when you serve 300-700 MB demo files.
 Free tier covers 10 GB of storage + 1 M Class A operations / month, plenty
 for the pro-demo seeding phase.
 
+### 2b · R2 CORS — REQUIRED for direct browser uploads
+
+The browser uploads `.dem` files **straight to R2** with a presigned PUT
+(so 300-500 MB demos never time out streaming through Railway). For that
+cross-origin PUT to work, the bucket needs CORS rules allowing your
+frontend origin.
+
+Cloudflare dashboard → bucket `riftscope-demos` → **Settings** → **CORS
+policy** → **Edit** → paste:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://riftscope-cs2.vercel.app"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["content-type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Replace the origin with your real Vercel URL (exact: scheme, host, no
+trailing slash). Add a second entry for `http://localhost:3000` if you
+also want direct uploads to work in dev against the prod bucket.
+
+> Without this, uploads fail in the browser console with
+> `blocked by CORS policy` on the R2 host (the API itself still works —
+> it's the direct PUT that's blocked).
+
 ---
 
 ## 3 · Railway — backend + Postgres
@@ -237,9 +267,11 @@ row in Postgres.
 
 1. Frontend → **Admin** → upload form (or the regular `/demos` page with
    the floating upload button).
-2. The browser POSTs the `.dem` to Railway, which streams it to R2 and
-   queues `_persist_normalized` / `_persist_round_tactics` /
-   `_persist_insights` in-process.
+2. The browser asks the API to presign an upload, PUTs the `.dem`
+   **directly to R2**, then calls `/demos/{id}/finalize`, which verifies
+   the object and queues `_persist_normalized` / `_persist_round_tactics`
+   / `_persist_insights` in-process. (Local-FS dev has no presign, so it
+   falls back to a multipart POST through the API.)
 3. Parsing a 300-500 MB demo takes 3-8 minutes (single uvicorn worker,
    demoparser2 is the bottleneck — that's CS2's protobuf decoding, not
    our code). Watch the status bar in the demo card; it updates every 5 s.

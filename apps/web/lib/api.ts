@@ -89,6 +89,24 @@ export const api = {
         method: "POST",
         body: formData,
       }),
+    /** Step 1 of the direct-to-storage upload: reserve a demo row and get
+     *  a presigned PUT URL (R2). Returns ``mode: "direct"`` when the
+     *  backend can't presign (local-FS dev) so the caller falls back to
+     *  the multipart ``upload`` above. */
+    presign: (filename: string) =>
+      request<{
+        mode: "presigned" | "direct";
+        id?: string;
+        url?: string;
+        uploadHeaders?: Record<string, string>;
+      }>("/demos/presign", {
+        method: "POST",
+        body: JSON.stringify({ filename }),
+      }),
+    /** Step 2: tell the backend the PUT landed so it verifies the object
+     *  and kicks off parsing. */
+    finalize: (id: string | number) =>
+      request<DemoStatusPayload>(`/demos/${id}/finalize`, { method: "POST" }),
     delete: (id: string | number) =>
       request<void>(`/demos/${id}`, { method: "DELETE" }),
     reprocess: (id: string | number) =>

@@ -21,6 +21,8 @@ from routers.deps import get_current_user
 from schemas.demo import (
     DemoAnalysisResponse,
     DemoInsightsResponse,
+    DemoPresignRequest,
+    DemoPresignResponse,
     DemoStatusResponse,
     DemoSummary,
     DemoUploadResponse,
@@ -125,6 +127,126 @@ async def upload_demo(
         filename=demo.filename,
         status="queued",
         uploadedAt=demo.uploaded_at or utcnow_naive(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Direct-to-storage upload (presigned PUT) — Step 1: presign
+#
+# The browser uploads the .dem straight to R2 with the URL we hand back,
+# so a 300-500 MB demo never streams through (and never times out on) the
+# API container. After the PUT lands, the client calls /finalize below.
+#
+# Falls back to ``mode="direct"`` when the active storage backend can't
+# presign (local-filesystem dev) — the client then uses POST /demos/upload.
+# ---------------------------------------------------------------------------
+_UPLOAD_CONTENT_TYPE = "application/octet-stream"
+
+
+@router.post("/presign", response_model=DemoPresignResponse)
+async def presign_upload(
+    body: DemoPresignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not body.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    if Path(body.filename).suffix.lower() != ".dem":
+        raise HTTPException(status_code=400, detail="Only .dem files are supported")
+
+    storage = get_storage()
+    presign = getattr(storage, "generate_presigned_put", None)
+    new_key = getattr(storage, "new_object_key", None)
+    supports = getattr(storage, "supports_presigned_upload", lambda: False)()
+    if not (supports and presign and new_key):
+        # Local FS dev: tell the browser to use the legacy multipart POST.
+        return DemoPresignResponse(mode="direct")
+
+    _, storage_filename, _ = new_key(body.filename)
+    url = presign(storage_filename, content_type=_UPLOAD_CONTENT_TYPE)
+    if not url:
+        raise HTTPException(status_code=502, detail="Could not presign upload")
+
+    # Register the demo up-front so finalize can flip it to "queued".
+    # Status "uploaded" = slot reserved, bytes en route to storage.
+    demo = Demo(
+        filename=body.filename,
+        storage_filename=storage_filename,
+        status="uploaded",
+        processing_progress=0,
+        user_id=current_user.id,
+    )
+    db.add(demo)
+    db.commit()
+    db.refresh(demo)
+
+    return DemoPresignResponse(
+        mode="presigned",
+        id=str(demo.id),
+        url=url,
+        uploadHeaders={"Content-Type": _UPLOAD_CONTENT_TYPE},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Direct-to-storage upload — Step 2: finalize
+#
+# Called after the browser's PUT to R2 succeeds. We confirm the object is
+# really in the bucket (so a half-failed PUT can't enqueue a phantom job),
+# then flip the demo to "queued" and kick off the parse pipeline.
+# ---------------------------------------------------------------------------
+@router.post("/{demo_id}/finalize", response_model=DemoStatusResponse)
+async def finalize_upload(
+    demo_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    demo = db.query(Demo).filter(Demo.id == demo_id).first()
+    if not demo:
+        raise HTTPException(status_code=404, detail="Demo not found")
+    _check_demo_access(demo, current_user)
+
+    if demo.status not in ("uploaded", "failed"):
+        # Already queued / processing / completed — idempotent no-op.
+        return DemoStatusResponse(
+            id=str(demo.id),
+            status=demo.status,
+            progress=demo.processing_progress,
+            errorMessage=demo.error_message,
+        )
+
+    storage = get_storage()
+    head = getattr(storage, "head", None)
+    if head is not None and head(demo.storage_filename) is None:
+        # The PUT never landed — don't enqueue a job that will only fail
+        # on download. Mark it failed so the UI stops spinning.
+        demo.status = "failed"
+        demo.error_message = "Upload did not complete — file not found in storage."
+        db.commit()
+        raise HTTPException(status_code=400, detail="Upload not found in storage")
+
+    bucket = getattr(storage, "bucket", None)
+    abs_path = (
+        f"s3://{bucket}/{demo.storage_filename}"
+        if bucket
+        else demo.storage_filename
+    )
+
+    demo.status = "queued"
+    demo.processing_progress = 0
+    demo.error_message = None
+    db.commit()
+    db.refresh(demo)
+
+    queue = get_queue()
+    queue.enqueue(background_tasks, process_demo, demo.id, abs_path)
+
+    return DemoStatusResponse(
+        id=str(demo.id),
+        status="queued",
+        progress=0,
+        errorMessage=None,
     )
 
 

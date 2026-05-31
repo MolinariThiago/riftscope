@@ -167,6 +167,56 @@ class S3DemoStorage:
             logger.exception("S3 delete failed: %s", storage_filename)
             return False
 
+    # ----------------------------------------------------------------------
+    # Direct browser → R2 upload (presigned PUT)
+    #
+    # The browser PUTs the .dem straight to the bucket using a short-lived
+    # signed URL, so the demo never streams through the API container. This
+    # removes the Railway request-timeout / RAM ceiling that was causing
+    # "network error at 100%" on large demos from slower connections.
+    # ----------------------------------------------------------------------
+    def supports_presigned_upload(self) -> bool:
+        return True
+
+    def new_object_key(self, filename: str) -> tuple[str, str, str]:
+        """Mint a fresh storage key for an upload that hasn't happened yet.
+
+        Mirrors the ``(uuid, storage_filename, abs_path)`` triple that
+        :meth:`save_demo` returns, but WITHOUT touching the network — the
+        bytes arrive later via the presigned PUT.
+        """
+        demo_uuid = str(uuid4())
+        extension = Path(filename or "").suffix.lower() or ".dem"
+        storage_filename = f"{demo_uuid}{extension}"
+        return demo_uuid, storage_filename, f"s3://{self.bucket}/{storage_filename}"
+
+    def generate_presigned_put(
+        self,
+        storage_filename: str,
+        expires_in: int = 900,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """Signed PUT URL the browser uploads to directly.
+
+        ``content_type`` is baked into the signature, so the browser MUST
+        send the exact same ``Content-Type`` header or R2 returns 403
+        (SignatureDoesNotMatch). The frontend sends
+        ``application/octet-stream`` to match.
+        """
+        try:
+            return self.s3_client.generate_presigned_url(
+                "put_object",
+                Params={
+                    "Bucket": self.bucket,
+                    "Key": storage_filename,
+                    "ContentType": content_type,
+                },
+                ExpiresIn=expires_in,
+            )
+        except ClientError:
+            logger.exception("S3 presign PUT failed: %s", storage_filename)
+            return ""
+
     def generate_presigned_url(
         self,
         storage_filename: str,

@@ -435,7 +435,62 @@ async function startUpload(
   }
 }
 
-function uploadWithProgress(
+// Upload strategy:
+//   1. Ask the backend to presign a direct-to-R2 PUT (or tell us to fall
+//      back to the legacy multipart POST in local-FS dev).
+//   2. PUT the bytes straight to storage — the API container never sees
+//      the 300-500 MB body, so no Railway request timeout / RAM ceiling.
+//   3. Finalize: the backend verifies the object and starts parsing.
+async function uploadWithProgress(
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<{ id: string; status: DemoStatus }> {
+  const slot = await api.demos.presign(file.name);
+
+  if (slot.mode === "presigned" && slot.url && slot.id) {
+    await putToStorage(slot.url, file, slot.uploadHeaders ?? {}, onProgress);
+    onProgress(100);
+    const fin = await api.demos.finalize(slot.id);
+    return { id: slot.id, status: fin.status };
+  }
+
+  // Local-FS dev (no presign support) — stream through the API.
+  return legacyMultipartUpload(file, onProgress);
+}
+
+/** PUT the file straight to the storage bucket via the presigned URL. */
+function putToStorage(
+  url: string,
+  file: File,
+  headers: Record<string, string>,
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    // The presigned URL carries its own SigV4 auth — sending cookies
+    // would break the signature AND trip R2's CORS (no credentials).
+    xhr.withCredentials = false;
+    // Content-Type MUST match what the backend signed, or R2 returns 403.
+    for (const [k, v] of Object.entries(headers)) {
+      xhr.setRequestHeader(k, v);
+    }
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`Storage upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(file);
+  });
+}
+
+/** Legacy path: multipart POST through the API (local dev only). */
+function legacyMultipartUpload(
   file: File,
   onProgress: (pct: number) => void,
 ): Promise<{ id: string; status: DemoStatus }> {

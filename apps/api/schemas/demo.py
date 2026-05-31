@@ -23,6 +23,29 @@ class DemoUploadResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class DemoPresignRequest(BaseModel):
+    """Browser asks for a direct-to-storage upload slot."""
+
+    filename: str
+
+
+class DemoPresignResponse(BaseModel):
+    """Direct-upload instructions.
+
+    ``mode == "presigned"`` → PUT the file to ``url`` (sending the
+    ``Content-Type`` in ``upload_headers``), then POST /demos/{id}/finalize.
+    ``mode == "direct"`` → storage backend can't presign (local FS dev), so
+    the client falls back to the legacy multipart POST /demos/upload.
+    """
+
+    mode: Literal["presigned", "direct"]
+    id: Optional[str] = None
+    url: Optional[str] = None
+    upload_headers: dict[str, str] = Field(default_factory=dict, alias="uploadHeaders")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class DemoSummary(BaseModel):
     """Lightweight demo entry for /demos list."""
 
