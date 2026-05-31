@@ -56,6 +56,19 @@ export default function DashboardLayout({
     }
   }, [authChecked, user, pathname, router]);
 
+  // Pre-beta sections are admin-only until they're polished. The Sidebar
+  // hides their links from regular users; this bounces anyone who reaches
+  // the URL directly (typed, bookmarked, shared) back to /demos. Keep this
+  // list in sync with the ``isAdmin`` gates in Sidebar.tsx.
+  useEffect(() => {
+    if (!authChecked || user === null || user.is_admin) return;
+    const adminOnly = ["/players", "/compare", "/anti-strat", "/vetos", "/pre-match"];
+    const blocked = adminOnly.some(
+      (p) => pathname === p || pathname.startsWith(p + "/"),
+    );
+    if (blocked) router.replace("/demos");
+  }, [authChecked, user, pathname, router]);
+
   // While we're checking the cookie OR mid-redirect, render a small
   // spinner instead of the dashboard chrome.  Avoids the flash of
   // protected content for anonymous users.

@@ -40,6 +40,11 @@ interface NavSpec {
 const navItems: NavSpec[] = [
   { href: "/demos",         icon: Telescope, labelKey: "nav.demoReview" },
   { href: "/pro",           icon: Trophy,    labelKey: "nav.proMatches" },
+];
+
+// Pre-beta sections — hidden from regular users until they're polished.
+// Only admins see these in the sidebar (see ``isAdmin`` gate in render).
+const adminNavItems: NavSpec[] = [
   { href: "/players",       icon: Users,     labelKey: "nav.players" },
   { href: "/compare",       icon: BarChart2, labelKey: "nav.compare" },
 ];
@@ -120,13 +125,26 @@ export function Sidebar({ forceCollapsed = false }: SidebarProps) {
             collapsed={collapsed}
           />
         ))}
-        {/* Tactical board + playbook — literal labels (i18n-free), like Admin. */}
+        {/* Pre-beta sections — admin-only until they leave beta. */}
+        {isAdmin &&
+          adminNavItems.map((item) => (
+            <SidebarItem
+              key={item.href}
+              href={item.href}
+              icon={item.icon}
+              label={t(item.labelKey)}
+              active={pathname === item.href || pathname.startsWith(item.href + "/")}
+              collapsed={collapsed}
+            />
+          ))}
+        {/* Tactical board + playbook — public, but flagged ``beta``. */}
         <SidebarItem
           href="/tactics"
           icon={PenTool}
           label="Tactics"
           active={pathname === "/tactics" || pathname.startsWith("/tactics/")}
           collapsed={collapsed}
+          beta
         />
         <SidebarItem
           href="/playbook"
@@ -134,28 +152,34 @@ export function Sidebar({ forceCollapsed = false }: SidebarProps) {
           label="Playbook"
           active={pathname === "/playbook" || pathname.startsWith("/playbook/")}
           collapsed={collapsed}
+          beta
         />
-        <SidebarItem
-          href="/anti-strat"
-          icon={Crosshair}
-          label="Anti-strat"
-          active={pathname === "/anti-strat" || pathname.startsWith("/anti-strat/")}
-          collapsed={collapsed}
-        />
-        <SidebarItem
-          href="/vetos"
-          icon={Ban}
-          label="Vetos"
-          active={pathname === "/vetos" || pathname.startsWith("/vetos/")}
-          collapsed={collapsed}
-        />
-        <SidebarItem
-          href="/pre-match"
-          icon={ClipboardList}
-          label="Pre-partida"
-          active={pathname === "/pre-match" || pathname.startsWith("/pre-match/")}
-          collapsed={collapsed}
-        />
+        {/* Anti-strat / Vetos / Pre-partida — admin-only (pre-beta). */}
+        {isAdmin && (
+          <>
+            <SidebarItem
+              href="/anti-strat"
+              icon={Crosshair}
+              label="Anti-strat"
+              active={pathname === "/anti-strat" || pathname.startsWith("/anti-strat/")}
+              collapsed={collapsed}
+            />
+            <SidebarItem
+              href="/vetos"
+              icon={Ban}
+              label="Vetos"
+              active={pathname === "/vetos" || pathname.startsWith("/vetos/")}
+              collapsed={collapsed}
+            />
+            <SidebarItem
+              href="/pre-match"
+              icon={ClipboardList}
+              label="Pre-partida"
+              active={pathname === "/pre-match" || pathname.startsWith("/pre-match/")}
+              collapsed={collapsed}
+            />
+          </>
+        )}
       </nav>
 
       <div className="py-4 px-2 space-y-1 border-t border-border">
@@ -225,12 +249,15 @@ function SidebarItem({
   label,
   active,
   collapsed,
+  beta = false,
 }: {
   href: string;
   icon: React.ElementType;
   label: string;
   active: boolean;
   collapsed: boolean;
+  /** Render a subtle "beta" pill to flag pre-release sections. */
+  beta?: boolean;
 }) {
   return (
     <Link
@@ -245,7 +272,12 @@ function SidebarItem({
     >
       <Icon size={16} className="flex-shrink-0" />
       {!collapsed && <span className="truncate">{label}</span>}
-      {active && !collapsed && (
+      {beta && !collapsed && (
+        <span className="ml-auto text-[9px] font-mono-rs uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-surface-elevated text-muted-foreground/70 border border-border/60">
+          beta
+        </span>
+      )}
+      {active && !collapsed && !beta && (
         <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary" />
       )}
     </Link>
