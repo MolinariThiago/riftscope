@@ -261,7 +261,7 @@ async def import_match_demo(
             if i == 0:
                 primary_demo = demo
 
-    elif body[:8].startswith(b"HL2DEMO"):
+    elif body[:8].startswith(b"HL2DEMO") or body[:8].startswith(b"PBDEMO"):
         # Naked .dem — easy path.
         primary_demo = _persist_demo_bytes(
             db,
