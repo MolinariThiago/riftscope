@@ -175,7 +175,17 @@ async def import_match_demo(
             )
             r.raise_for_status()
             body = r.content
+
             logger.info("Misterio revelado: %s", body[:200])
+    except Exception as exc:
+        logger.warning(
+            "HLTV demo download failed for match %s (%s vs %s): %s",
+            match.id, match.team_a, match.team_b, exc,
+        )
+        return ImportResult(
+            "download_failed", None,
+            f"Couldn't reach HLTV: {exc.__class__.__name__}",
+        )
 
     except Exception as exc:
         logger.warning(
