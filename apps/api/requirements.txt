@@ -50,3 +50,5 @@ boto3>=1.34.0,<2
 # Stripe (billing). Used by routers/billing.py — gated behind the
 # monetization_enabled feature flag.
 stripe>=11.0.0,<13
+
+curl_cffi==0.7.3
