@@ -160,27 +160,27 @@ async def import_match_demo(
     proxy = _hltv_proxy()
     if proxy:
         logger.info("HLTV: routing through proxy %s", proxy)
-   try:
-        proxies = {"http": proxy, "https": proxy} if proxy else None
-        
-        async with requests.AsyncSession(
-            timeout=HLTV_DOWNLOAD_TIMEOUT,
-            impersonate="chrome",
-            proxies=proxies
-        ) as client:
-            r = await client.get(match.demo_url)
-            r.raise_for_status()
-            body = r.content
+    try:
+            proxies = {"http": proxy, "https": proxy} if proxy else None
             
+            async with requests.AsyncSession(
+                timeout=HLTV_DOWNLOAD_TIMEOUT,
+                impersonate="chrome",
+                proxies=proxies
+            ) as client:
+                r = await client.get(match.demo_url)
+                r.raise_for_status()
+                body = r.content
+                
     except Exception as exc:
-        logger.warning(
-            "HLTV demo download failed for match %s (%s vs %s): %s",
-            match.id, match.team_a, match.team_b, exc,
-        )
-        return ImportResult(
-            "download_failed", None,
-            f"Couldn't reach HLTV: {exc.__class__.__name__}",
-        )
+            logger.warning(
+                "HLTV demo download failed for match %s (%s vs %s): %s",
+                match.id, match.team_a, match.team_b, exc,
+            )
+            return ImportResult(
+                "download_failed", None,
+                f"Couldn't reach HLTV: {exc.__class__.__name__}",
+            )
     base_name = _sanitize_filename(
         f"{match.team_a}-vs-{match.team_b}-{match.id}"
     )
