@@ -418,11 +418,6 @@ async def upload_pro_match(
                 if not chunk:
                     break
                 if first_chunk:
-                    if not (chunk.startswith(b"HL2DEMO") or chunk.startswith(b"PBDEMO")):
-                        raise HTTPException(
-                            status_code=400,
-                            detail="File doesn't look like a CS2 demo (missing PBDEMO/HL2DEMO header)",
-                        )
                     first_chunk = False
                 total += len(chunk)
                 if total > max_bytes:
