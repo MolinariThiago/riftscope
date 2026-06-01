@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-import httpx
+from curl_cffi import requests
 from sqlalchemy.orm import Session
 
 from core.settings import get_settings
@@ -160,20 +160,19 @@ async def import_match_demo(
     proxy = _hltv_proxy()
     if proxy:
         logger.info("HLTV: routing through proxy %s", proxy)
-    try:
-        async with httpx.AsyncClient(
+   try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        
+        async with requests.AsyncSession(
             timeout=HLTV_DOWNLOAD_TIMEOUT,
-            follow_redirects=True,
-            headers={
-                "User-Agent": HLTV_USER_AGENT,
-                "Accept": "*/*",
-            },
-            **({"proxy": proxy} if proxy else {}),
+            impersonate="chrome",
+            proxies=proxies
         ) as client:
             r = await client.get(match.demo_url)
             r.raise_for_status()
             body = r.content
-    except httpx.HTTPError as exc:
+            
+    except Exception as exc:
         logger.warning(
             "HLTV demo download failed for match %s (%s vs %s): %s",
             match.id, match.team_a, match.team_b, exc,
@@ -182,7 +181,6 @@ async def import_match_demo(
             "download_failed", None,
             f"Couldn't reach HLTV: {exc.__class__.__name__}",
         )
-
     base_name = _sanitize_filename(
         f"{match.team_a}-vs-{match.team_b}-{match.id}"
     )
@@ -221,7 +219,7 @@ async def import_match_demo(
         # resolver (``services.rar_runtime``) tries hard to find one
         # at startup, including auto-downloading from rarlab on
         # Windows — so the auto-import flow Just Works for the
-        # operator without manual setup.
+        # oper witatorhout manual setup.
         extracted = _try_extract_rar(body, base_name)
         if extracted is None:
             # No unrar binary available. Save the archive so the user
