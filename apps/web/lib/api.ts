@@ -211,6 +211,11 @@ export const api = {
           playedAt: string | null;
           demoUrl: string | null;
           demoId: number | null;
+          /** Download-phase status while the HLTV import runs in the
+           *  background (before a Demo row exists). null = idle/done,
+           *  "importing" = downloading, "failed" = see importError. */
+          importStatus: "importing" | "failed" | null;
+          importError: string | null;
         }>;
       }>(`/pro/matches?limit=${limit}`),
     sync: () =>
@@ -237,8 +242,11 @@ export const api = {
      */
     import: (matchId: number) =>
       request<{
-        demo_id: number;
-        status: "queued" | "existing" | "unsupported_archive";
+        demo_id: number | null;
+        /** "importing" — download started in the background; poll the
+         *  /pro list and watch ``importStatus`` for progress. "existing"
+         *  — already imported, demo_id points at the Demo. */
+        status: "importing" | "existing";
         message: string;
       }>(`/pro/matches/${matchId}/import`, { method: "POST" }),
     /** Verify the configured outbound proxy actually changes the IP.

@@ -502,8 +502,13 @@ def schedule_demo_processing(demo_id: int, file_path: str) -> asyncio.Task:
     Fire-and-forget scheduler — kept for backwards compatibility with code that
     imports it directly. Production paths should go through
     :func:`services.queue.get_queue` instead.
+
+    Uses :func:`core.bg.spawn` so the task keeps a strong reference and isn't
+    garbage-collected mid-parse.
     """
-    return asyncio.create_task(process_demo(demo_id, file_path))
+    from core.bg import spawn
+
+    return spawn(process_demo(demo_id, file_path), name=f"parse-demo-{demo_id}")
 
 
 # =============================================================================

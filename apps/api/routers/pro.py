@@ -42,9 +42,11 @@ from db.models.pro_match import ProMatch
 from db.models.user import User
 from routers.admin import require_admin
 from services.demo_sources import get_sources
+from core.bg import spawn
 from services.pro_import import (
     get_pro_cutoff,
     import_match_demo,
+    import_match_in_background,
     pro_cutoff_naive,
 )
 from services.pro_scheduler import scheduler_status
@@ -175,43 +177,49 @@ async def sync_pro_matches(
     }
 
 
-@router.post("/matches/{match_id}/import")
+@router.post("/matches/{match_id}/import", status_code=202)
 async def import_pro_match(
     match_id: int,
-    background_tasks: BackgroundTasks,  # accepted for API parity; unused
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
-    """Manual one-off trigger of the same logic the scheduler uses."""
-    del background_tasks  # unused — service uses asyncio.create_task
+    """Kick off a HLTV import in the background and return immediately.
+
+    The download can take minutes (HLTV demos are 300 MB-1 GB), so we no
+    longer ``await`` it inside the request — that left the UI spinner stuck
+    for the whole download and looked like an infinite hang when HLTV
+    stalled. Instead we flip ``import_status`` to "importing", spawn the
+    download as a tracked background task, and return 202. The /pro list
+    polls and reflects the status (downloading → done / failed).
+    """
     match = db.query(ProMatch).filter(ProMatch.id == match_id).first()
     if not match:
         raise HTTPException(status_code=404, detail="Pro match not found")
 
-    result = await import_match_demo(db, match)
+    # Already imported — nothing to do; point at the existing demo.
+    if match.demo_id:
+        return {
+            "status": "existing",
+            "demo_id": match.demo_id,
+            "message": "Este partido ya fue importado.",
+        }
+    # Already downloading — idempotent, don't launch a second download.
+    if match.import_status == "importing":
+        return {
+            "status": "importing",
+            "demo_id": None,
+            "message": "Ya se está importando esta demo…",
+        }
 
-    # Map the service's structured result to the historical HTTP shape
-    # so the frontend doesn't have to know the new internals.
-    if result.status == "no_demo_url":
-        raise HTTPException(
-            status_code=400,
-            detail="This match has no associated demo URL on HLTV yet",
-        )
-    if result.status == "download_failed":
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Couldn't reach the HLTV demo URL (Cloudflare may be "
-                "blocking us). Try the manual download link instead."
-            ),
-        )
-    if result.status == "unrecognized_format":
-        raise HTTPException(status_code=502, detail=result.message)
-    # queued / existing / unsupported_archive — all 2xx
+    match.import_status = "importing"
+    match.import_error = None
+    db.commit()
+
+    spawn(import_match_in_background(match.id), name=f"import-match-{match.id}")
     return {
-        "demo_id": result.demo_id,
-        "status": result.status,
-        "message": result.message,
+        "status": "importing",
+        "demo_id": None,
+        "message": "Importación iniciada. El estado se actualiza en /pro.",
     }
 
 
@@ -480,9 +488,9 @@ async def upload_pro_match(
     db.commit()
     db.refresh(pro_match)
 
-    # Kick off parsing in the background. Same fire-and-forget pattern
-    # the auto-importer uses.
-    asyncio.create_task(process_demo(demo.id, str(abs_path)))
+    # Kick off parsing in the background. ``spawn`` retains a strong
+    # reference so the parse task can't be garbage-collected mid-run.
+    spawn(process_demo(demo.id, str(abs_path)), name=f"parse-demo-{demo.id}")
     logger.info(
         "manual pro upload: pro_match=%s demo=%s team_a=%r team_b=%r event=%r",
         pro_match.id, demo.id, pro_match.team_a, pro_match.team_b,

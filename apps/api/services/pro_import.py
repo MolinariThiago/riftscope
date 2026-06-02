@@ -33,6 +33,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -43,7 +44,9 @@ from uuid import uuid4
 from curl_cffi import requests
 from sqlalchemy.orm import Session
 
+from core.bg import spawn
 from core.settings import get_settings
+from db.database import SessionLocal
 from db.models.demo import Demo
 from db.models.pro_match import ProMatch
 from services.storage import UPLOAD_DIR
@@ -106,7 +109,7 @@ def pro_cutoff_naive() -> datetime:
     comparisons against the (naive UTC) ``played_at`` column."""
     return get_pro_cutoff().replace(tzinfo=None)
 
-HLTV_DOWNLOAD_TIMEOUT = 60.0
+HLTV_DOWNLOAD_TIMEOUT = 600.0
 HLTV_USER_AGENT = "RIFTSCOPE/0.3 (+https://riftscope.local)"
 
 
@@ -147,9 +150,7 @@ async def import_match_demo(
     match: ProMatch,
 ) -> ImportResult:
     """Download the demo for ``match`` and queue it for parsing."""
-    if not match.demo_url:
-        return ImportResult("no_demo_url", None, "Match has no demo URL")
-
+    
     if match.demo_id:
         existing = db.query(Demo).filter(Demo.id == match.demo_id).first()
         if existing:
@@ -168,24 +169,88 @@ async def import_match_demo(
             impersonate="chrome",
             proxies=proxies
         ) as client:
-            # ACA ESTA EL CAMBIO: Le agregamos el Referer
+            
+            # --- LÓGICA AUTOMÁTICA: BUSCADOR INTELIGENTE EN HLTV ---
+            url_base = match.demo_url
+
+            if not url_base:
+                logger.info("Buscando automáticamente %s vs %s en HLTV...", match.team_a, match.team_b)
+                
+                # Función interna para limpiar nombres de equipos
+                def get_main_word(name: str) -> str:
+                    ignore = {"team", "esports", "gaming", "clan", "fc", "club"}
+                    words = [w.lower() for w in re.split(r'\W+', name) if w]
+                    for w in words:
+                        if w not in ignore:
+                            return w
+                    return words[0] if words else ""
+
+                word_a = get_main_word(match.team_a)
+                word_b = get_main_word(match.team_b)
+
+                # 1. Buscamos en la página de resultados de HLTV
+                results_resp = await client.get(
+                    "https://www.hltv.org/results",
+                    headers={"Referer": "https://www.hltv.org/"}
+                )
+                results_resp.raise_for_status()
+
+                # 2. Extraemos todos los links de los partidos
+                match_links = re.findall(r'href=["\'](/matches/\d+/[^"\']+)["\']', results_resp.text)
+                
+                # 3. Comparamos para encontrar el correcto
+                found_match_url = None
+                for link in match_links:
+                    link_lower = link.lower()
+                    if word_a in link_lower and word_b in link_lower:
+                        found_match_url = "https://www.hltv.org" + link
+                        break
+                
+                if not found_match_url:
+                    return ImportResult(
+                        "no_demo_url", None, 
+                        f"No pude encontrar el partido ({word_a} vs {word_b}) en los resultados de HLTV."
+                    )
+                
+                logger.info("¡Página del partido encontrada!: %s", found_match_url)
+                url_base = found_match_url
+
+            # --- FASE 2: ENCONTRAR LA DEMO ---
+            if "/matches/" in url_base:
+                logger.info("Escaneando el código de la página para robar el link de descarga...")
+                page_resp = await client.get(
+                    url_base,
+                    headers={"Referer": "https://www.hltv.org/results"}
+                )
+                page_resp.raise_for_status()
+
+                match_link = re.search(r'href=["\'](/download/demo/\d+)["\']', page_resp.text)
+                
+                if not match_link:
+                    return ImportResult(
+                        "no_demo_url", None, 
+                        "El partido está en HLTV, pero todavía no subieron el archivo de la demo."
+                    )
+                
+                demo_download_url = "https://www.hltv.org" + match_link.group(1)
+                logger.info("¡Link de descarga oficial encontrado!: %s", demo_download_url)
+
+                # Guardamos el link en tu BD
+                match.demo_url = demo_download_url
+                db.commit()
+            else:
+                demo_download_url = url_base
+
+            # --- FASE 3: DESCARGA PESADA ---
+            logger.info("Iniciando descarga de la demo desde: %s", demo_download_url)
             r = await client.get(
-                match.demo_url, 
-                headers={"Referer": "https://www.hltv.org/"}
+                demo_download_url, 
+                headers={"Referer": url_base}
             )
             r.raise_for_status()
             body = r.content
-
-            logger.info("Misterio revelado: %s", body[:200])
-    except Exception as exc:
-        logger.warning(
-            "HLTV demo download failed for match %s (%s vs %s): %s",
-            match.id, match.team_a, match.team_b, exc,
-        )
-        return ImportResult(
-            "download_failed", None,
-            f"Couldn't reach HLTV: {exc.__class__.__name__}",
-        )
+            
+            logger.info("Descarga completada con éxito. Procesando archivo...")
 
     except Exception as exc:
         logger.warning(
@@ -196,6 +261,8 @@ async def import_match_demo(
             "download_failed", None,
             f"Couldn't reach HLTV: {exc.__class__.__name__}",
         )
+
+    # --- A PARTIR DE ACÁ NADA CAMBIÓ, ES TU CÓDIGO ORIGINAL ---
     base_name = _sanitize_filename(
         f"{match.team_a}-vs-{match.team_b}-{match.id}"
     )
@@ -306,6 +373,57 @@ async def import_match_demo(
     )
 
 
+async def import_match_in_background(match_id: int) -> None:
+    """Run :func:`import_match_demo` off the request, with its OWN db session.
+
+    The HTTP handler that triggered the import returns immediately (202), so
+    its request-scoped session is already closed by the time the download
+    finishes. We open a fresh session here and write ``import_status`` /
+    ``import_error`` on the match so the /pro UI can poll for progress
+    instead of holding an open request for the whole (up to 600 s) download.
+    """
+    db = SessionLocal()
+    try:
+        match = db.query(ProMatch).filter(ProMatch.id == match_id).first()
+        if match is None:
+            logger.warning("background import: match %s vanished", match_id)
+            return
+        match.import_status = "importing"
+        match.import_error = None
+        db.commit()
+
+        res = await import_match_demo(db, match)
+
+        # Re-fetch in case the long-running call expired the instance.
+        match = db.query(ProMatch).filter(ProMatch.id == match_id).first()
+        if match is None:
+            return
+        if res.status in ("queued", "existing"):
+            # Success — a Demo row now exists (demo_id set); its own status
+            # takes over from here, so clear the import flag.
+            match.import_status = None
+            match.import_error = None
+        else:
+            match.import_status = "failed"
+            match.import_error = res.message
+        db.commit()
+        logger.info(
+            "background import for match %s finished: %s", match_id, res.status
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception("background import for match %s crashed", match_id)
+        try:
+            m = db.query(ProMatch).filter(ProMatch.id == match_id).first()
+            if m is not None:
+                m.import_status = "failed"
+                m.import_error = f"{exc.__class__.__name__}: {exc}"
+                db.commit()
+        except Exception:
+            logger.exception("failed to record import error for match %s", match_id)
+    finally:
+        db.close()
+
+
 def _persist_demo_bytes(
     db: Session,
     data: bytes,
@@ -335,8 +453,10 @@ def _persist_demo_bytes(
 
     # Fire-and-forget the worker. ``process_demo`` is async and
     # self-contained — it opens its own DB session and updates the
-    # Demo row as it goes.
-    asyncio.create_task(process_demo(demo.id, str(abs_path)))
+    # Demo row as it goes. ``spawn`` retains a strong reference so the
+    # task isn't garbage-collected mid-parse (the old bare
+    # ``create_task`` silently died at "Procesando archivo...").
+    spawn(process_demo(demo.id, str(abs_path)), name=f"parse-demo-{demo.id}")
     logger.info(
         "Queued pro-match demo for parsing: pro_match=%s demo_id=%s file=%s",
         pro_match.id, demo.id, filename,

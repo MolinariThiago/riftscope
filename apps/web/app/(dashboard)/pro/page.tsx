@@ -45,7 +45,14 @@ export default function ProMatchesPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["pro-matches"],
     queryFn: () => api.pro.matches(200),
-    refetchInterval: 60_000,
+    // Poll fast while any match is mid-download so its "Descargando…"
+    // state updates promptly; idle back to once a minute otherwise.
+    refetchInterval: (query) =>
+      (query.state.data?.matches ?? []).some(
+        (m) => m.importStatus === "importing",
+      )
+        ? 5_000
+        : 60_000,
   });
 
   const { data: schedulerStatus } = useQuery({
@@ -637,9 +644,28 @@ function MatchActions({ match }: { match: ProMatch }) {
     );
   }
 
-  // STATE: importable (has a HLTV demo URL but not imported yet).
+  // STATE: download running in the background (set by the import endpoint,
+  // cleared when the Demo row appears). Driven by polling — survives reloads
+  // and reflects the REAL download, not just this tab's in-flight request.
+  if (match.importStatus === "importing") {
+    return (
+      <div
+        className={cn(
+          "inline-flex items-center gap-1.5 text-xs font-semibold",
+          "px-3 py-1.5 rounded-md border border-primary/30 text-primary bg-primary/5",
+        )}
+        title="Descargando la demo desde HLTV en segundo plano"
+      >
+        <Loader2 size={12} className="animate-spin" />
+        Descargando demo…
+      </div>
+    );
+  }
+
+  // STATE: importable (has a HLTV demo URL but not imported yet) — also the
+  // retry path after a failed download.
   if (match.demoUrl) {
-    const result = importMatch.data;
+    const failed = match.importStatus === "failed";
     return (
       <div className="flex flex-col items-end gap-1">
         <div className="flex items-center gap-1.5">
@@ -648,19 +674,20 @@ function MatchActions({ match }: { match: ProMatch }) {
             disabled={importMatch.isPending}
             className={cn(
               "inline-flex items-center gap-1.5 text-xs font-semibold",
-              "px-3 py-1.5 rounded-md border border-primary/40 text-primary",
+              "px-3 py-1.5 rounded-md border text-primary",
               "hover:bg-primary/10 disabled:opacity-50 transition-colors",
+              failed ? "border-loss/40 text-loss hover:bg-loss/10" : "border-primary/40",
             )}
           >
             {importMatch.isPending ? (
               <>
                 <Loader2 size={12} className="animate-spin" />
-                Importando…
+                Iniciando…
               </>
             ) : (
               <>
                 <Download size={12} />
-                Importar al 2D
+                {failed ? "Reintentar" : "Importar al 2D"}
               </>
             )}
           </button>
@@ -674,27 +701,9 @@ function MatchActions({ match }: { match: ProMatch }) {
             HLTV <ExternalLink size={9} />
           </a>
         </div>
-        {result && (
-          <div
-            className={cn(
-              "text-[10px] max-w-xs text-right rounded-md px-2 py-1",
-              result.status === "unsupported_archive"
-                ? "bg-loss/10 text-loss border border-loss/30"
-                : "bg-primary/10 text-primary border border-primary/30",
-            )}
-          >
-            {result.message}
-            {result.status === "queued" && (
-              <>
-                {" · "}
-                <Link
-                  href={`/demo/${result.demo_id}/replay`}
-                  className="underline hover:no-underline"
-                >
-                  ver progreso
-                </Link>
-              </>
-            )}
+        {failed && match.importError && (
+          <div className="text-[10px] max-w-xs text-right rounded-md px-2 py-1 bg-loss/10 text-loss border border-loss/30">
+            {match.importError}
           </div>
         )}
         {importMatch.error && (

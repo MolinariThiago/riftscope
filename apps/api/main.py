@@ -87,6 +87,15 @@ def _ensure_steam_columns() -> None:
                     text("ALTER TABLE pro_matches ADD COLUMN tier VARCHAR")
                 )
                 logger.info("migrated pro_matches table: added tier")
+        # Import-lifecycle columns — see ProMatch.import_status. Added so the
+        # non-blocking manual import can surface download progress/errors.
+        for col_name in ("import_status", "import_error"):
+            if col_name not in existing_pm:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(f"ALTER TABLE pro_matches ADD COLUMN {col_name} VARCHAR")
+                    )
+                    logger.info("migrated pro_matches table: added %s", col_name)
 
     # Playbook: type + tags columns added after the table first shipped.
     if "playbooks" in insp.get_table_names():

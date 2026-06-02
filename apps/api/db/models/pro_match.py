@@ -62,6 +62,17 @@ class ProMatch(Base):
     # When the user imports + parses this match, link the resulting Demo row.
     demo_id = Column(Integer, ForeignKey("demos.id", ondelete="SET NULL"), nullable=True)
 
+    # Import lifecycle for the DOWNLOAD phase (before a Demo row exists, so it
+    # can't be tracked via demo status yet). The manual import endpoint now
+    # returns immediately and runs the download in the background, updating
+    # this so the /pro UI can show "downloading…" / "failed" instead of
+    # hanging on an open request.
+    #   None        — idle / never imported (or done: demo_id is set)
+    #   "importing" — download from HLTV in progress
+    #   "failed"    — download / extract failed (reason in import_error)
+    import_status = Column(String, nullable=True)
+    import_error = Column(String, nullable=True)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -80,4 +91,6 @@ class ProMatch(Base):
             "playedAt": self.played_at.isoformat() if self.played_at else None,
             "demoUrl": self.demo_url,
             "demoId": self.demo_id,
+            "importStatus": self.import_status,
+            "importError": self.import_error,
         }
