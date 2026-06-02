@@ -302,7 +302,11 @@ async def import_match_demo(
         # at startup, including auto-downloading from rarlab on
         # Windows — so the auto-import flow Just Works for the
         # oper witatorhout manual setup.
-        extracted = _try_extract_rar(body, base_name)
+        # Extraction shells out to unrar (blocking + potentially slow for a
+        # 300 MB+ .dem). Run it off the event loop so it never freezes the
+        # API. A missing/invalid binary returns None fast (see _try_extract_rar
+        # → rar_runtime validation), so this can't hang on the broken stub.
+        extracted = await asyncio.to_thread(_try_extract_rar, body, base_name)
         if extracted is None:
             # No unrar binary available. Save the archive so the user
             # can grab it from disk, but mark the Demo failed so the

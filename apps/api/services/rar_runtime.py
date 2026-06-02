@@ -25,24 +25,63 @@ import os
 import platform
 import shutil
 import stat
+import subprocess
 from pathlib import Path
-
-import httpx
 
 logger = logging.getLogger("riftscope.rar")
 
-# Where we drop the downloaded unrar binary. Lives next to the
-# uploads dir so it doesn't clutter the source tree.
+# Where a unrar binary may be cached. Lives next to the uploads dir so it
+# doesn't clutter the source tree.
 BIN_DIR = Path(__file__).resolve().parent.parent / "storage" / "bin"
 
-# Standalone unrar.exe published by RARLab (free, no licence required
-# for the unrar-only utility). The .exe is ~300 KB.
-UNRAR_WINDOWS_URL = "https://www.rarlab.com/rar/unrarw64.exe"
+# Windows flag: don't pop a console window when we probe a binary.
+_CREATE_NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0
 
 # Cached after the first resolution so we don't re-walk the
 # filesystem on every status request.
 _resolved_path: str | None = None
-_resolved_source: str = ""  # "system" | "downloaded" | "missing"
+_resolved_source: str = ""  # "env" | "system" | "winrar" | "cached" | "missing"
+
+
+def _unrar_works(path: str) -> bool:
+    """Confirm ``path`` is the real command-line unrar, not a GUI/SFX stub.
+
+    The CLI unrar prints a ``UNRAR <ver> ... Usage:`` banner when run with no
+    args and exits. The self-extracting ``unrarw64.exe`` that the old
+    auto-download grabbed by mistake prints nothing (and/or pops a GUI),
+    which made ``rarfile`` hang forever on a background extraction. We run
+    the candidate with stdin closed, a short timeout, and no console window,
+    and require the banner before trusting it.
+    """
+    try:
+        proc = subprocess.run(
+            [path],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=10,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return b"UNRAR" in (proc.stdout or b"").upper()
+
+
+def _accept(path: str, source: str) -> str | None:
+    """Validate + register ``path`` as the active unrar, or return None."""
+    global _resolved_path, _resolved_source
+    if not _unrar_works(path):
+        logger.warning(
+            "rar runtime: candidate at %s (%s) is not a working CLI unrar "
+            "(no UNRAR banner) — skipping",
+            path, source,
+        )
+        return None
+    _resolved_path = path
+    _resolved_source = source
+    _apply(path)
+    logger.info("rar runtime: using %s unrar at %s", source, path)
+    return path
 
 
 def rar_runtime_status() -> dict:
@@ -55,34 +94,37 @@ def rar_runtime_status() -> dict:
 
 
 def ensure_rar_runtime() -> str | None:
-    """Resolve a usable unrar binary path. Call once at startup.
+    """Resolve a *working* command-line unrar binary. Call once at startup.
+
+    Every candidate is validated with :func:`_unrar_works` before we trust
+    it — this is what stops the broken self-extracting ``unrarw64.exe`` (or
+    any GUI stub) from being registered and then hanging ``rarfile`` forever
+    on a background extraction.
 
     Lookup order:
       1. ``UNRAR_TOOL`` env var (operator override).
-      2. ``unrar`` / ``unrar.exe`` on PATH.
-      3. Common Windows install dirs (WinRAR).
-      4. Project-local ``storage/bin/unrar.exe`` (download cache).
-      5. (Windows only) auto-download from rarlab.com to (4).
+      2. ``unrar`` / ``unrar.exe`` / ``bsdtar`` on PATH (Linux: apt unrar).
+      3. Common Windows WinRAR install dirs.
+      4. Project-local ``storage/bin/unrar(.exe)`` cache.
+
+    There is intentionally NO auto-download: the old one fetched RARLab's
+    ``unrarw64.exe``, which is a self-extracting INSTALLER, not the CLI tool,
+    and shelling out to it hung. On Windows just install WinRAR (its bundled
+    ``UnRAR.exe`` is found at step 3); on Linux ``apt install unrar``.
     """
     global _resolved_path, _resolved_source
 
     # 1. Env override.
     env_path = (os.getenv("UNRAR_TOOL") or "").strip()
     if env_path and Path(env_path).is_file():
-        _resolved_path = env_path
-        _resolved_source = "env"
-        _apply(env_path)
-        return env_path
+        if (p := _accept(env_path, "env")):
+            return p
 
     # 2. PATH lookup.
     for candidate in ("unrar", "unrar.exe", "bsdtar"):
         path = shutil.which(candidate)
-        if path:
-            _resolved_path = path
-            _resolved_source = "system"
-            _apply(path)
-            logger.info("rar runtime: using system binary at %s", path)
-            return path
+        if path and (p := _accept(path, "system")):
+            return p
 
     # 3. Common Windows WinRAR install dirs.
     if platform.system() == "Windows":
@@ -92,63 +134,22 @@ def ensure_rar_runtime() -> str | None:
             Path("C:/Program Files/WinRAR/unrar.exe"),
             Path("C:/Program Files (x86)/WinRAR/unrar.exe"),
         ):
-            if guess.is_file():
-                _resolved_path = str(guess)
-                _resolved_source = "winrar"
-                _apply(str(guess))
-                logger.info(
-                    "rar runtime: using WinRAR-installed binary at %s",
-                    guess,
-                )
-                return str(guess)
+            if guess.is_file() and (p := _accept(str(guess), "winrar")):
+                return p
 
-    # 4. Already-downloaded local copy.
+    # 4. Project-local cache (e.g. an operator dropped a real unrar here).
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     local = BIN_DIR / ("unrar.exe" if platform.system() == "Windows" else "unrar")
-    if local.is_file():
-        _resolved_path = str(local)
-        _resolved_source = "cached"
-        _apply(str(local))
-        logger.info("rar runtime: using cached binary at %s", local)
-        return str(local)
-
-    # 5. Auto-download (Windows only).
-    if platform.system() == "Windows":
-        try:
-            logger.info(
-                "rar runtime: no unrar found — downloading standalone "
-                "binary from rarlab.com to %s",
-                local,
-            )
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                r = client.get(UNRAR_WINDOWS_URL)
-                r.raise_for_status()
-                local.write_bytes(r.content)
-            # Sanity: make sure the file looks like a Windows EXE.
-            if local.read_bytes()[:2] != b"MZ":
-                logger.warning(
-                    "rar runtime: downloaded file isn't a PE binary, removing"
-                )
-                local.unlink(missing_ok=True)
-            else:
-                _resolved_path = str(local)
-                _resolved_source = "downloaded"
-                _apply(str(local))
-                logger.info("rar runtime: downloaded unrar.exe to %s", local)
-                return str(local)
-        except Exception as exc:
-            logger.warning(
-                "rar runtime: auto-download failed: %s. Install WinRAR or "
-                "place unrar.exe on PATH to enable .rar demo extraction.",
-                exc,
-            )
+    if local.is_file() and (p := _accept(str(local), "cached")):
+        return p
 
     _resolved_path = None
     _resolved_source = "missing"
     logger.warning(
-        "rar runtime: no unrar binary available. HLTV .rar demos will "
-        "be saved but not extracted. On Linux: ``apt install unrar``. "
-        "On Windows: install WinRAR or drop ``unrar.exe`` in PATH."
+        "rar runtime: no working unrar binary available. HLTV .rar demos "
+        "will be saved but not extracted. On Linux: ``apt install unrar``. "
+        "On Windows: install WinRAR (free) — its UnRAR.exe is picked up "
+        "automatically — or drop a real CLI ``unrar.exe`` on PATH."
     )
     return None
 
