@@ -112,6 +112,26 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
 
     # ------------------------------------------------------------------
+    # Pro-match auto-import (HLTV)
+    # ------------------------------------------------------------------
+    # Outbound proxy for HLTV traffic. Webshare Static Residential format:
+    #   http://USER:PASS@HOST:PORT
+    # Empty = direct connection (works for dev; Cloudflare often blocks
+    # Railway IPs in prod).
+    hltv_proxy_url: str = ""
+    # Auto-import scheduler: only chase matches in these tier buckets.
+    # Tier-1/2 (S+/S/A/B) keep the proxy budget focused on demos people
+    # actually want; C and Unclassified are ignored unless an admin clicks
+    # "Import" manually. Comma-separated env: ``PRO_AUTO_TIERS=S+,S,A,B``.
+    pro_auto_tiers: List[str] = Field(
+        default_factory=lambda: ["S+", "S", "A", "B"]
+    )
+    # How many HLTV imports may run at the same time. Webshare Static
+    # Residential is one IP — keep this low so the proxy doesn't get rate-
+    # limited and the parser doesn't fight itself for the CPU.
+    pro_import_concurrency: int = 2
+
+    # ------------------------------------------------------------------
     # Production safety net — refuse to boot with insecure defaults.
     # ------------------------------------------------------------------
     @model_validator(mode="after")

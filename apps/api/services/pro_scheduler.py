@@ -36,10 +36,13 @@ from typing import Any
 from db.database import SessionLocal
 from db.models.pro_match import ProMatch
 from services.demo_sources import get_sources
+from core.settings import get_settings
 from services.pro_import import (
+    claim_match,
     get_pro_cutoff,
     import_match_demo,
     pro_cutoff_naive,
+    release_match,
 )
 from services.demo_sources.liquipedia import LiquipediaSource
 from services.rar_runtime import rar_runtime_status
@@ -307,18 +310,25 @@ async def _import_step() -> None:
     cutoff = pro_cutoff_naive()
     db = SessionLocal()
     try:
-        # Candidates: completed matches with demo_url + no demo_id,
-        # AND on or after the configured cutoff date so we don't burn
-        # rate-limited HLTV downloads on historical matches the
-        # operator didn't ask for.
-        candidates: list[ProMatch] = (
+        # Candidates: completed matches with demo_url + no demo_id, on or
+        # after the cutoff date, AND inside the operator's allowed tier
+        # buckets (``PRO_AUTO_TIERS`` env — default S+/S/A/B). This stops
+        # the proxy budget from being burned on C-tier scrims and FACEIT
+        # cups that nobody asked for; admins can still trigger a manual
+        # import for those from the UI.
+        allowed_tiers = [t for t in get_settings().pro_auto_tiers if t]
+        q = (
             db.query(ProMatch)
             .filter(ProMatch.played_at >= cutoff)
             .filter(ProMatch.demo_id == None)  # noqa: E711
             .filter(ProMatch.demo_url.isnot(None))
             .filter(ProMatch.score_a.isnot(None))
             .filter(ProMatch.score_b.isnot(None))
-            .order_by(ProMatch.played_at.desc().nullslast())
+        )
+        if allowed_tiers:
+            q = q.filter(ProMatch.tier.in_(allowed_tiers))
+        candidates: list[ProMatch] = (
+            q.order_by(ProMatch.played_at.desc().nullslast())
             .limit(MAX_IMPORTS_PER_TICK * 3)
             .all()
         )
@@ -342,6 +352,16 @@ async def _import_step() -> None:
         for i, match in enumerate(candidates):
             if _shutdown is not None and _shutdown.is_set():
                 break
+            # Skip rows that a manual /pro/matches/{id}/import is already
+            # working on — same dedupe gate the HTTP handler uses, so the
+            # auto tick and the click can't pile two downloads on the same
+            # demo.
+            if not await claim_match(match.id):
+                logger.info(
+                    "scheduler: skipping match %s — import already in flight",
+                    match.id,
+                )
+                continue
             try:
                 result = await import_match_demo(db, match)
             except Exception:
@@ -349,7 +369,10 @@ async def _import_step() -> None:
                     "scheduler auto-import failed for match %s", match.id,
                 )
                 errors += 1
+                await release_match(match.id)
                 continue
+            else:
+                await release_match(match.id)
             status_counts[result.status] = status_counts.get(result.status, 0) + 1
             if result.status == "queued":
                 queued += 1

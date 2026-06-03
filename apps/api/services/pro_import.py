@@ -114,19 +114,90 @@ HLTV_USER_AGENT = "RIFTSCOPE/0.3 (+https://riftscope.local)"
 
 
 def _hltv_proxy() -> str | None:
-    """Outbound proxy for HLTV demo downloads.
+    """Outbound proxy URL for HLTV traffic, or None for a direct connection.
 
-    Honours ``HLTV_PROXY`` first (lets the operator point HLTV at a
-    different exit than Liquipedia), then the standard ``HTTPS_PROXY``
-    / ``HTTP_PROXY`` env vars. Returns ``None`` for a direct
-    connection.
+    Resolution order:
+      1. ``settings.hltv_proxy_url`` — wired from the ``HLTV_PROXY_URL``
+         env var. This is where the Webshare Static Residential creds go
+         (``http://USER:PASS@HOST:PORT``). Single source of truth in prod.
+      2. Legacy env vars ``HLTV_PROXY`` / ``HTTPS_PROXY`` / ``HTTP_PROXY``
+         — kept so an operator can shadow the setting for a one-off test
+         without touching the deploy.
+      3. Otherwise None (direct).
+
+    Logs the redacted host so we can confirm in prod that we're going OUT
+    via the proxy without leaking credentials in the log stream.
     """
-    return (
-        os.getenv("HLTV_PROXY")
+    proxy = (
+        get_settings().hltv_proxy_url
+        or os.getenv("HLTV_PROXY")
         or os.getenv("HTTPS_PROXY")
         or os.getenv("HTTP_PROXY")
-        or None
-    ) or None
+        or ""
+    ).strip()
+    return proxy or None
+
+
+def _redact_proxy(url: str) -> str:
+    """``http://user:pass@host:port`` → ``http://***@host:port`` for logs."""
+    try:
+        scheme, rest = url.split("://", 1)
+        if "@" in rest:
+            _, host = rest.split("@", 1)
+            return f"{scheme}://***@{host}"
+    except ValueError:
+        pass
+    return url
+
+
+# ---------------------------------------------------------------------------
+# Concurrency control
+#
+# Two layers, both critical to the rewrite we just did:
+#
+# 1. ``_in_flight`` is a set of match IDs whose import is currently running.
+#    The /pro/matches/{id}/import endpoint AND the auto-scheduler both go
+#    through ``claim_match`` before doing any work — so clicking "Import"
+#    while the scheduler is already chasing the same match (or double-
+#    clicking the button) no-ops the duplicate instead of starting a
+#    second download. This is the fix for the "4 'Descarga completada' for
+#    the same match" log we saw before.
+#
+# 2. ``_import_semaphore`` bounds how many imports may run at the same
+#    time across the whole API process. Webshare Static Residential is
+#    one IP — running N downloads in parallel just gets that IP rate-
+#    limited by HLTV/Cloudflare and starves the demoparser2 thread of CPU.
+#    ``PRO_IMPORT_CONCURRENCY`` defaults to 2; bump it only after we move
+#    parsing to Celery on a separate worker.
+# ---------------------------------------------------------------------------
+_in_flight: set[int] = set()
+_in_flight_lock = asyncio.Lock()
+_import_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """Lazy so the loop exists by the time we ask for it."""
+    global _import_semaphore
+    if _import_semaphore is None:
+        _import_semaphore = asyncio.Semaphore(
+            max(1, get_settings().pro_import_concurrency)
+        )
+    return _import_semaphore
+
+
+async def claim_match(match_id: int) -> bool:
+    """Try to reserve ``match_id`` for an import. Returns False if another
+    import for the same match is already running."""
+    async with _in_flight_lock:
+        if match_id in _in_flight:
+            return False
+        _in_flight.add(match_id)
+        return True
+
+
+async def release_match(match_id: int) -> None:
+    async with _in_flight_lock:
+        _in_flight.discard(match_id)
 
 ImportStatus = Literal[
     "queued",                # downloaded + queued for parsing
@@ -149,8 +220,14 @@ async def import_match_demo(
     db: Session,
     match: ProMatch,
 ) -> ImportResult:
-    """Download the demo for ``match`` and queue it for parsing."""
-    
+    """Download the demo for ``match`` and queue it for parsing.
+
+    Bounded by ``_import_semaphore`` so we never run more than
+    ``PRO_IMPORT_CONCURRENCY`` imports at once (Webshare gives one IP and
+    parsing is CPU-heavy — running 4 in parallel was what made the API
+    appear frozen).
+    """
+
     if match.demo_id:
         existing = db.query(Demo).filter(Demo.id == match.demo_id).first()
         if existing:
@@ -160,7 +237,16 @@ async def import_match_demo(
 
     proxy = _hltv_proxy()
     if proxy:
-        logger.info("HLTV: routing through proxy %s", proxy)
+        logger.info("HLTV: routing through proxy %s", _redact_proxy(proxy))
+    async with _get_semaphore():
+        return await _import_match_demo_inner(db, match, proxy)
+
+
+async def _import_match_demo_inner(
+    db: Session,
+    match: ProMatch,
+    proxy: str | None,
+) -> ImportResult:
     try:
         proxies = {"http": proxy, "https": proxy} if proxy else None
 
@@ -385,7 +471,17 @@ async def import_match_in_background(match_id: int) -> None:
     finishes. We open a fresh session here and write ``import_status`` /
     ``import_error`` on the match so the /pro UI can poll for progress
     instead of holding an open request for the whole (up to 600 s) download.
+
+    Wrapped by :func:`claim_match` so a duplicate trigger (user clicked the
+    button twice, or the auto-scheduler picked the same row before the
+    manual one finished) becomes a no-op instead of a second HLTV download.
     """
+    if not await claim_match(match_id):
+        logger.info(
+            "background import: match %s already importing — skipping duplicate",
+            match_id,
+        )
+        return
     db = SessionLocal()
     try:
         match = db.query(ProMatch).filter(ProMatch.id == match_id).first()
@@ -426,6 +522,7 @@ async def import_match_in_background(match_id: int) -> None:
             logger.exception("failed to record import error for match %s", match_id)
     finally:
         db.close()
+        await release_match(match_id)
 
 
 def _persist_demo_bytes(
