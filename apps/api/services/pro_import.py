@@ -49,6 +49,7 @@ from core.settings import get_settings
 from db.database import SessionLocal
 from db.models.demo import Demo
 from db.models.pro_match import ProMatch
+from services.hltv_proxy_pool import get_proxy_pool
 from services.storage import UPLOAD_DIR
 from workers.demo_worker import process_demo
 
@@ -112,30 +113,12 @@ def pro_cutoff_naive() -> datetime:
 HLTV_DOWNLOAD_TIMEOUT = 600.0
 HLTV_USER_AGENT = "RIFTSCOPE/0.3 (+https://riftscope.local)"
 
-
-def _hltv_proxy() -> str | None:
-    """Outbound proxy URL for HLTV traffic, or None for a direct connection.
-
-    Resolution order:
-      1. ``settings.hltv_proxy_url`` — wired from the ``HLTV_PROXY_URL``
-         env var. This is where the Webshare Static Residential creds go
-         (``http://USER:PASS@HOST:PORT``). Single source of truth in prod.
-      2. Legacy env vars ``HLTV_PROXY`` / ``HTTPS_PROXY`` / ``HTTP_PROXY``
-         — kept so an operator can shadow the setting for a one-off test
-         without touching the deploy.
-      3. Otherwise None (direct).
-
-    Logs the redacted host so we can confirm in prod that we're going OUT
-    via the proxy without leaking credentials in the log stream.
-    """
-    proxy = (
-        get_settings().hltv_proxy_url
-        or os.getenv("HLTV_PROXY")
-        or os.getenv("HTTPS_PROXY")
-        or os.getenv("HTTP_PROXY")
-        or ""
-    ).strip()
-    return proxy or None
+# HTTP status codes we treat as "this IP is blocked, try another one".
+# 403 = Cloudflare challenge / bot detection, 429 = per-IP rate limit,
+# 503 = Cloudflare service-unavailable wedge. Anything else (404 / 5xx
+# without these markers) is a per-match issue, not a per-IP one, so it
+# does NOT trigger pool cooldown.
+_BLOCKED_STATUSES = {403, 429, 503}
 
 
 def _redact_proxy(url: str) -> str:
@@ -148,6 +131,36 @@ def _redact_proxy(url: str) -> str:
     except ValueError:
         pass
     return url
+
+
+class _Blocked(Exception):
+    """Internal — raised when the current IP looks blocked / rate-limited
+    so the retry loop in ``_import_match_demo_inner`` knows to park the
+    proxy and try another one."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _check_response(resp, where: str) -> None:
+    """``raise_for_status`` replacement that distinguishes block from miss.
+
+    HLTV's edge sometimes serves 403 (Cloudflare bot challenge) or 429
+    (rate-limited) HTML with status text instead of the demo bytes. Those
+    are not real "the resource is gone" errors — the same URL works again
+    once we rotate IP — so we tag them so the retry loop knows to park
+    the proxy. Real HTTP misses (404, 500) bubble up as plain
+    HTTPError so the caller can return a normal download_failed result.
+    """
+    status = getattr(resp, "status_code", None)
+    if status is None:
+        return
+    if status in _BLOCKED_STATUSES:
+        raise _Blocked(f"HTTP {status} from {where}")
+    if status >= 400:
+        # Keep curl_cffi's behaviour for everything else.
+        resp.raise_for_status()
 
 
 # ---------------------------------------------------------------------------
@@ -222,10 +235,14 @@ async def import_match_demo(
 ) -> ImportResult:
     """Download the demo for ``match`` and queue it for parsing.
 
-    Bounded by ``_import_semaphore`` so we never run more than
-    ``PRO_IMPORT_CONCURRENCY`` imports at once (Webshare gives one IP and
-    parsing is CPU-heavy — running 4 in parallel was what made the API
-    appear frozen).
+    Wraps the inner pipeline with:
+      * ``_import_semaphore`` — global cap on simultaneous imports
+        (``PRO_IMPORT_CONCURRENCY``) so the API stays responsive while a
+        big demo is downloading.
+      * A proxy-pool retry loop — if the chosen Webshare IP returns a
+        Cloudflare-style block (403/429/503) or times out, the pool parks
+        it for ``HLTV_PROXY_COOLDOWN_SECONDS`` and we retry with the next
+        healthy IP. Up to ``HLTV_PROXY_MAX_RETRIES`` distinct IPs.
     """
 
     if match.demo_id:
@@ -235,11 +252,51 @@ async def import_match_demo(
                 "existing", existing.id, "Match already imported"
             )
 
-    proxy = _hltv_proxy()
-    if proxy:
-        logger.info("HLTV: routing through proxy %s", _redact_proxy(proxy))
+    pool = get_proxy_pool()
     async with _get_semaphore():
-        return await _import_match_demo_inner(db, match, proxy)
+        # Try up to N distinct IPs from the pool. ``max_retries`` is
+        # already capped to pool size at pool construction, so we never
+        # over-rotate against a small pool.
+        tried: list[str] = []
+        attempts = max(1, pool.max_retries) if pool.size > 0 else 1
+        last_block: str | None = None
+        for attempt in range(1, attempts + 1):
+            proxy = await pool.acquire() if pool.size > 0 else None
+            if pool.size > 0 and proxy is None:
+                # Every IP on cooldown. Surface that clearly so the
+                # operator can adjust cooldown / pool size.
+                wait = await pool.wait_seconds_until_next_available()
+                msg = (
+                    f"Todas las {pool.size} IP del proxy en cooldown — "
+                    f"la más próxima libera en {int(wait)}s. "
+                    f"Considera bajar HLTV_PROXY_COOLDOWN_SECONDS o ampliar el pool."
+                )
+                logger.warning("HLTV: %s", msg)
+                return ImportResult("download_failed", None, msg)
+            if proxy:
+                tried.append(proxy)
+                logger.info(
+                    "HLTV: attempt %d/%d via %s",
+                    attempt, attempts, _redact_proxy(proxy),
+                )
+            try:
+                result = await _import_match_demo_inner(db, match, proxy)
+                if proxy:
+                    await pool.report_success(proxy)
+                return result
+            except _Blocked as exc:
+                if proxy:
+                    await pool.report_failure(proxy, exc.reason)
+                last_block = exc.reason
+                # Loop continues with the next acquire().
+                continue
+        # Exhausted the retry budget.
+        msg = (
+            f"HLTV bloqueó las {len(tried)} IP que probé (último error: {last_block})."
+            if pool.size > 0
+            else f"HLTV bloqueó la conexión directa: {last_block}"
+        )
+        return ImportResult("download_failed", None, msg)
 
 
 async def _import_match_demo_inner(
@@ -279,7 +336,7 @@ async def _import_match_demo_inner(
                     "https://www.hltv.org/results",
                     headers={"Referer": "https://www.hltv.org/"}
                 )
-                results_resp.raise_for_status()
+                _check_response(results_resp, "hltv.org/results")
 
                 # 2. Extraemos todos los links de los partidos
                 match_links = re.findall(r'href=["\'](/matches/\d+/[^"\']+)["\']', results_resp.text)
@@ -308,7 +365,7 @@ async def _import_match_demo_inner(
                     url_base,
                     headers={"Referer": "https://www.hltv.org/results"}
                 )
-                page_resp.raise_for_status()
+                _check_response(page_resp, "match page")
 
                 match_link = re.search(r'href=["\'](/download/demo/\d+)["\']', page_resp.text)
                 
@@ -330,22 +387,46 @@ async def _import_match_demo_inner(
             # --- FASE 3: DESCARGA PESADA ---
             logger.info("Iniciando descarga de la demo desde: %s", demo_download_url)
             r = await client.get(
-                demo_download_url, 
+                demo_download_url,
                 headers={"Referer": url_base}
             )
-            r.raise_for_status()
+            _check_response(r, "demo download")
             body = r.content
             
             logger.info("Descarga completada con éxito. Procesando archivo...")
 
+    except _Blocked:
+        # Already classified as a per-IP block by the explicit checks
+        # below — re-raise so the retry loop in import_match_demo can park
+        # this IP and try the next one.
+        raise
     except Exception as exc:
-        logger.warning(
-            "HLTV demo download failed for match %s (%s vs %s): %s",
-            match.id, match.team_a, match.team_b, exc,
+        # Classify network-level failures into "this IP is bad" vs
+        # "something else broke":
+        #   - Connection / proxy / timeout errors usually mean the
+        #     residential IP got dropped mid-stream by Cloudflare or
+        #     Webshare. Treat as blocked so we rotate.
+        #   - Anything else (parse error, OOM, DB) bubbles up as a hard
+        #     download_failed without poisoning the pool.
+        cls = exc.__class__.__name__
+        msg_l = str(exc).lower()
+        looks_like_network = (
+            "timeout" in cls.lower()
+            or "timeout" in msg_l
+            or "proxy" in msg_l
+            or "connection" in msg_l
+            or "ssl" in msg_l
+            or "curl" in msg_l
         )
+        logger.warning(
+            "HLTV demo download failed for match %s (%s vs %s): %s: %s",
+            match.id, match.team_a, match.team_b, cls, exc,
+        )
+        if looks_like_network:
+            raise _Blocked(f"{cls}: {exc}") from exc
         return ImportResult(
             "download_failed", None,
-            f"Couldn't reach HLTV: {exc.__class__.__name__}",
+            f"Couldn't reach HLTV: {cls}",
         )
 
     # --- A PARTIR DE ACÁ NADA CAMBIÓ, ES TU CÓDIGO ORIGINAL ---

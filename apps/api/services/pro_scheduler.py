@@ -37,6 +37,7 @@ from db.database import SessionLocal
 from db.models.pro_match import ProMatch
 from services.demo_sources import get_sources
 from core.settings import get_settings
+from services.hltv_proxy_pool import get_proxy_pool
 from services.pro_import import (
     claim_match,
     get_pro_cutoff,
@@ -108,6 +109,11 @@ def scheduler_status() -> dict[str, Any]:
         # being silently skipped. Without unrar, ~95 % of pro demos
         # can't be auto-imported.
         "rar_extraction": rar_runtime_status(),
+        # HLTV proxy pool health (how many IPs are healthy vs parked).
+        # When ``healthy == 0`` and ``configured > 0`` every IP is on
+        # cooldown — the UI uses that to nudge the operator to either
+        # bump the pool size or shrink the cooldown.
+        "hltv_proxy_pool": get_proxy_pool().snapshot(),
         # Liquipedia cooldown — if non-zero, we hit a 429 recently and
         # are waiting for Cloudflare/Liquipedia to lift the throttle.
         # The UI surfaces this so the user knows why the page isn't

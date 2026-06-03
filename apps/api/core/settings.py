@@ -114,11 +114,27 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Pro-match auto-import (HLTV)
     # ------------------------------------------------------------------
-    # Outbound proxy for HLTV traffic. Webshare Static Residential format:
-    #   http://USER:PASS@HOST:PORT
-    # Empty = direct connection (works for dev; Cloudflare often blocks
-    # Railway IPs in prod).
-    hltv_proxy_url: str = ""
+    # Pool of outbound proxies for HLTV traffic. Webshare Static Residential
+    # delivers N endpoints (e.g. 20) — one per IP — and we rotate through
+    # them with per-endpoint cooldown so a blocked / rate-limited IP gets
+    # parked while the others keep working.
+    #
+    # Env: ``HLTV_PROXY_URLS`` — comma OR newline separated list of full
+    # ``http://USER:PASS@HOST:PORT`` URLs. ``HLTV_PROXY_URL`` (singular,
+    # legacy) is still honoured and treated as a 1-element pool.
+    #
+    # Empty = direct connection (works for dev; Cloudflare typically blocks
+    # cloud egress IPs in prod).
+    hltv_proxy_urls: List[str] = Field(default_factory=list)
+    hltv_proxy_url: str = ""  # legacy single-proxy var; merged into the pool
+    # How long an IP stays parked after a blocked / failed request, in
+    # seconds. Default 30 min — enough that HLTV's per-IP rate-limit
+    # window resets before we retry the same address.
+    hltv_proxy_cooldown_seconds: int = 1800
+    # How many distinct IPs to try for a single import before giving up.
+    # Capped by pool size at runtime — pool of 3 with retries=10 still
+    # only tries 3 IPs.
+    hltv_proxy_max_retries: int = 3
     # Auto-import scheduler: only chase matches in these tier buckets.
     # Tier-1/2 (S+/S/A/B) keep the proxy budget focused on demos people
     # actually want; C and Unclassified are ignored unless an admin clicks
