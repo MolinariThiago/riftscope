@@ -45,7 +45,8 @@ from services.pro_import import (
     pro_cutoff_naive,
     release_match,
 )
-from services.demo_sources.liquipedia import LiquipediaSource
+from services.demo_sources.hltv import HltvSource
+from services.demo_sources.liquipedia import LiquipediaSource  # noqa: F401
 from services.rar_runtime import rar_runtime_status
 
 logger = logging.getLogger("riftscope.scheduler.pro")
@@ -114,12 +115,17 @@ def scheduler_status() -> dict[str, Any]:
         # cooldown — the UI uses that to nudge the operator to either
         # bump the pool size or shrink the cooldown.
         "hltv_proxy_pool": get_proxy_pool().snapshot(),
-        # Liquipedia cooldown — if non-zero, we hit a 429 recently and
-        # are waiting for Cloudflare/Liquipedia to lift the throttle.
-        # The UI surfaces this so the user knows why the page isn't
-        # filling up: it's not a bug, we just have to be patient.
+        # HLTV source cooldown — if non-zero, we hit a rate-limit on
+        # the /results scrape recently and are waiting it out. The UI
+        # surfaces this so the user knows why the page isn't filling up.
+        "hltv_source_cooldown_seconds": round(
+            HltvSource.cooldown_remaining_seconds(),
+        ),
+        # Legacy key kept for backward-compat with the frontend until it
+        # is updated to read the new one. Same data — the active source
+        # is now HLTV.
         "liquipedia_cooldown_seconds": round(
-            LiquipediaSource.cooldown_remaining_seconds(),
+            HltvSource.cooldown_remaining_seconds(),
         ),
         **_state,
     }
