@@ -73,11 +73,40 @@ class HltvSource:
         html = await self._fetch_results(limit=limit)
         if not html:
             return []
+        # Log a one-shot diagnostic about the page so a zero-match parse
+        # is debuggable WITHOUT shipping a new build: page size, how many
+        # ``result-con`` divs the cheap probe sees (signals "HTML changed"
+        # vs "HTML wasn't HLTV at all"), and the title tag, which makes a
+        # Cloudflare challenge / "Just a moment..." page obvious.
+        title = ""
+        m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
+        if m:
+            title = m.group(1).strip()[:120]
+        result_con_count = len(re.findall(r"result-con", html, re.IGNORECASE))
+        logger.info(
+            "HLTV /results: %d chars, title=%r, result-con probe matches=%d",
+            len(html), title, result_con_count,
+        )
         matches = list(self._parse(html))
+        if not matches and result_con_count > 0:
+            # Layout drift — the rough probe sees rows but the structured
+            # regex doesn't. Surface a sample so we can adjust the regex
+            # without having to scrape from a dev machine.
+            sample_start = html.lower().find("result-con")
+            sample = html[max(0, sample_start - 40):sample_start + 600]
+            logger.warning(
+                "HLTV /results: parser found 0 matches but page DOES contain "
+                "'result-con' — HTML layout drifted. Sample around first hit:\n%s",
+                sample,
+            )
         if since:
             matches = [
                 m for m in matches if m.played_at is None or m.played_at >= since
             ]
+        logger.info(
+            "HLTV /results: %d matches after parse + since filter (since=%s)",
+            len(matches), since,
+        )
         # Defensive truncate — HLTV's first page already gives us ~100 rows.
         return matches[:limit]
 
@@ -153,77 +182,119 @@ class HltvSource:
         r'([A-Z][a-z]+ \d{1,2}[a-z]{0,2}\s+\d{4})\s*</span>',
         re.IGNORECASE,
     )
-    # One whole row.  We capture the inner HTML so a sub-regex can dig
-    # into the cells. Non-greedy on the body so consecutive rows don't
-    # collide.
-    _RE_ROW = re.compile(
-        r'<div\s+class="result-con[^"]*">\s*<a\s+[^>]*href="(/matches/\d+/[^"]+)"[^>]*>(.*?)</a>\s*</div>',
-        re.IGNORECASE | re.DOTALL,
+    # Looser row regex than the strict one I started with — turns out
+    # HLTV's prod HTML has ``class="result-con"`` mixed with other
+    # tokens (``"result-con something"`` or ``"something result-con"``)
+    # and the ``<a>`` sometimes carries data-* / aria-* attributes
+    # before ``href``. The strict regex rejected those rows, leaving
+    # ``last_sync_result.inserted = 0`` even when the page DID contain
+    # results. Use ``\b`` word boundary on result-con and a non-greedy
+    # gap before href.
+    #
+    # Match strategy is two-phase: a CHEAP anchor regex finds every
+    # ``<a href="/matches/N/slug">`` whose URL pattern is HLTV's match
+    # detail page (very stable). For each anchor we walk back ~600 chars
+    # and forward ~3 kB into the page to grab the row body, then run the
+    # cell-level regexes on that.
+    _RE_MATCH_ANCHOR = re.compile(
+        r'<a[^>]+href="(/matches/(\d+)/[^"]+)"',
+        re.IGNORECASE,
     )
+    # Cell-level regexes — match the actual class names HLTV uses,
+    # tolerant to attribute order and extra classes.
     _RE_TEAMS = re.compile(
-        r'<div class="team(?:\s+team-won|\s+team-lost)?">([^<]+)</div>',
+        r'class="[^"]*\bteam\b[^"]*"[^>]*>([^<]+)<',
         re.IGNORECASE,
     )
     _RE_SCORE = re.compile(
-        r'<span\s+class="score-(?:won|lost|tied)">\s*(\d+)\s*</span>',
+        r'class="[^"]*\bscore-(?:won|lost|tied)\b[^"]*"[^>]*>\s*(\d+)\s*<',
         re.IGNORECASE,
     )
     _RE_EVENT = re.compile(
-        r'<span\s+class="event-name">([^<]+)</span>',
+        r'class="[^"]*\bevent-name\b[^"]*"[^>]*>([^<]+)<',
         re.IGNORECASE,
     )
     _RE_MAP = re.compile(
-        r'<div\s+class="map-text">\s*([a-z0-9_]+)\s*</div>',
+        r'class="[^"]*\bmap-text\b[^"]*"[^>]*>\s*([a-z0-9_]+)\s*<',
         re.IGNORECASE,
     )
 
+    # Hard ceiling on the per-match window. Within that cap, the actual
+    # window for match N stops where match N+1's anchor starts so the
+    # cell-level regexes can't accidentally pick up the NEXT row's team
+    # name (we hit this exact bug during development — the second match's
+    # lookback covered the first match's body, so both rows ended up with
+    # the same teams). HLTV row bodies are < 3 kB; 5 kB is comfortable.
+    _ROW_MAX = 5000
+
     def _parse(self, html: str):
-        # Walk the page in order. Each "Results for ..." header sets the
-        # date for every row that follows it until the next header.
-        # Splitting on the header keeps the chronological context.
-        chunks = self._RE_DAY_HEADER.split(html)
-        # split() with one capture group: [pre, date1, body1, date2, body2, ...]
-        if len(chunks) <= 1:
-            # No day header found — treat the whole page as "unknown date".
-            yield from self._rows_in_chunk(chunks[0] if chunks else html, played_at=None)
-            return
-        # Skip the pre-amble; it contains nav / hero, never rows.
-        i = 1
-        while i + 1 < len(chunks):
-            date_text = chunks[i]
-            body = chunks[i + 1]
-            played_at = _parse_hltv_date(date_text)
-            yield from self._rows_in_chunk(body, played_at=played_at)
-            i += 2
+        # First map out the "Results for ..." headers so we can attach the
+        # right played_at to each row. We capture (offset, date) pairs and
+        # then assign every anchor's date by binary-walking the list.
+        headers = [
+            (m.start(), _parse_hltv_date(m.group(1)))
+            for m in self._RE_DAY_HEADER.finditer(html)
+        ]
 
-    def _rows_in_chunk(self, chunk: str, *, played_at: datetime | None):
-        for row in self._RE_ROW.finditer(chunk):
-            href = row.group(1)
-            inner = row.group(2)
+        def date_for(pos: int) -> datetime | None:
+            # Last header whose offset is <= pos.
+            chosen: datetime | None = None
+            for off, dt in headers:
+                if off <= pos:
+                    chosen = dt
+                else:
+                    break
+            return chosen
 
-            teams = self._RE_TEAMS.findall(inner)
+        # Pre-collect anchors so each row's window can stop at the next
+        # one — that's the cheapest way to guarantee row bodies don't
+        # bleed into each other.
+        anchors = list(self._RE_MATCH_ANCHOR.finditer(html))
+        seen_ids: set[str] = set()
+        for i, anchor in enumerate(anchors):
+            hltv_id = anchor.group(2)
+            if hltv_id in seen_ids:
+                # HLTV often renders the same match twice (e.g. in the
+                # "live" rail + the results list). Keep only the first.
+                continue
+            href = anchor.group(1)
+            start = anchor.start()
+            # Window starts at the anchor (the row's HTML follows it
+            # because the entire row sits INSIDE the <a>) and ends at
+            # the next anchor (or hard cap).
+            window_end = start + self._ROW_MAX
+            if i + 1 < len(anchors):
+                window_end = min(window_end, anchors[i + 1].start())
+            window = html[start:window_end]
+
+            teams = [t for t in (_clean(x) for x in self._RE_TEAMS.findall(window)) if t]
             if len(teams) < 2:
                 continue
-            team_a = _clean(teams[0])
-            team_b = _clean(teams[1])
-            if not team_a or not team_b:
+            # The "team" class shows up on multiple elements (avatar +
+            # name etc). Pick the first two distinct non-empty names that
+            # appear, which on every HLTV row are the two teams in order.
+            uniq: list[str] = []
+            for t in teams:
+                if not uniq or t != uniq[-1]:
+                    uniq.append(t)
+                if len(uniq) >= 2:
+                    break
+            if len(uniq) < 2:
                 continue
+            team_a, team_b = uniq[0], uniq[1]
 
-            scores = self._RE_SCORE.findall(inner)
+            scores = self._RE_SCORE.findall(window)
             score_a = int(scores[0]) if len(scores) >= 1 else None
             score_b = int(scores[1]) if len(scores) >= 2 else None
 
-            event_match = self._RE_EVENT.search(inner)
+            event_match = self._RE_EVENT.search(window)
             event_name = _clean(event_match.group(1)) if event_match else None
 
-            map_match = self._RE_MAP.search(inner)
+            map_match = self._RE_MAP.search(window)
             map_name = _clean(map_match.group(1)) if map_match else None
 
-            # Stable match id = HLTV's numeric id from the URL.
-            id_match = re.search(r'/matches/(\d+)/', href)
-            if not id_match:
-                continue
-            hltv_id = id_match.group(1)
+            played_at = date_for(start)
+            seen_ids.add(hltv_id)
 
             yield ExternalMatch(
                 source=HltvSource.name,
