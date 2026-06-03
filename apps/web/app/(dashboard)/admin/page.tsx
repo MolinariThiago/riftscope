@@ -25,6 +25,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { AdminFeedbackPanel } from "@/components/admin/AdminFeedbackPanel";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/auth";
 import { cn } from "@/lib/utils";
@@ -445,6 +446,11 @@ export default function AdminDashboardPage() {
           </table>
         </div>
       </div>
+
+      {/* Feedback queue from the floating widget — separate panel so the
+          /admin page stays scannable. Lives at the bottom because most
+          triage happens after looking at users + metrics first. */}
+      <AdminFeedbackPanel />
     </div>
   );
 }

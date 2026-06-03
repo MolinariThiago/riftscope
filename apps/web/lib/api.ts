@@ -23,6 +23,14 @@ import type {
   PreMatchReport,
   TeamReport,
 } from "@/types/anti-strat";
+import type {
+  FeedbackAdminListResponse,
+  FeedbackAdminRecord,
+  FeedbackAdminUpdateBody,
+  FeedbackCreateBody,
+  FeedbackPublic,
+  FeedbackStatus,
+} from "@/types/feedback";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -451,6 +459,30 @@ export const api = {
       ),
     deleteDemo: (demoId: number) =>
       request<{ ok: boolean }>(`/admin/demos/${demoId}`, { method: "DELETE" }),
+    /** Admin queue for the bottom-right feedback widget. */
+    feedback: {
+      list: (status?: FeedbackStatus, limit = 200) =>
+        request<FeedbackAdminListResponse>(
+          `/admin/feedback?limit=${limit}` +
+            (status ? `&status=${status}` : ""),
+        ),
+      update: (reportId: number, body: FeedbackAdminUpdateBody) =>
+        request<FeedbackAdminRecord>(`/admin/feedback/${reportId}`, {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        }),
+    },
+  },
+
+  // -----------------------------------------------------------------------
+  // Feedback widget — POST a user-submitted report.
+  // -----------------------------------------------------------------------
+  feedback: {
+    submit: (body: FeedbackCreateBody) =>
+      request<FeedbackPublic>("/feedback", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   },
 };
 

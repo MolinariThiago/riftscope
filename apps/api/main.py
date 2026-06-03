@@ -21,6 +21,7 @@ from db.database import Base, engine
 # has to be imported first.
 from db.models.user import User  # noqa: F401
 from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound  # noqa: F401
+from db.models.feedback import FeedbackReport  # noqa: F401
 from db.models.insight import DemoInsight  # noqa: F401
 from db.models.pro_match import ProMatch  # noqa: F401
 from db.models.playbook import Playbook, PlaybookFolder  # noqa: F401
@@ -31,6 +32,7 @@ from routers import (
     anti_strat,
     auth,
     demos,
+    feedback,
     maps,
     players,
     playbook,
@@ -222,3 +224,7 @@ app.include_router(pro.router, prefix="/pro", tags=["pro"])
 # ``/admin/admin/metrics``.
 app.include_router(admin.router)
 app.include_router(auth.router)
+# Feedback widget — two routers (public + admin queue), each carries its
+# own prefix (/feedback and /admin/feedback), so we pass them in bare.
+app.include_router(feedback.public_router)
+app.include_router(feedback.admin_router)

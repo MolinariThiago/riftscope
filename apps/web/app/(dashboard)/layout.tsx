@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
+import { FeedbackWidget } from "@/components/feedback/FeedbackWidget";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { UploadDemoPopover } from "@/components/layout/UploadDemoPopover";
@@ -117,6 +118,12 @@ export default function DashboardLayout({
           level so it survives route changes (e.g. clicking "Previous
           uploads" inside the popover navigates without unmounting). */}
       <UploadDemoPopover />
+
+      {/* Floating feedback widget — bottom-right launcher → expandable
+          form. Only renders for logged-in users (the gate is inside the
+          component as a defence-in-depth measure even though this layout
+          already redirects anons to /login above). */}
+      <FeedbackWidget />
     </div>
   );
 }
