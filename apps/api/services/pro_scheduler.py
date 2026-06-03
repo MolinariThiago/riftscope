@@ -322,7 +322,10 @@ async def _import_step() -> None:
         # the proxy budget from being burned on C-tier scrims and FACEIT
         # cups that nobody asked for; admins can still trigger a manual
         # import for those from the UI.
-        allowed_tiers = [t for t in get_settings().pro_auto_tiers if t]
+        # The env value is a plain string ("S+,S,A,B") so we split here —
+        # see the comment in core/settings.py for why it's not List[str].
+        raw_tiers = get_settings().pro_auto_tiers or ""
+        allowed_tiers = [t.strip() for t in raw_tiers.split(",") if t.strip()]
         q = (
             db.query(ProMatch)
             .filter(ProMatch.played_at >= cutoff)

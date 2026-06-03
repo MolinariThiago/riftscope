@@ -9,11 +9,10 @@ can pick which implementation to use without touching call sites — the
 factories in services/* read these flags at startup.
 """
 
-import re
 from functools import lru_cache
 from typing import List, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default SECRET_KEY value — published in source.  Anything else means
@@ -124,15 +123,16 @@ class Settings(BaseSettings):
     # ``http://USER:PASS@HOST:PORT`` URLs. ``HLTV_PROXY_URL`` (singular,
     # legacy) is still honoured and treated as a 1-element pool.
     #
-    # NB: pydantic-settings normally tries to JSON-decode List[str] env
-    # vars, which would crash for the human-friendly CSV format we want.
-    # The ``_split_csv_list`` validator below intercepts the raw env
-    # string FIRST and turns it into a real list, so the JSON path is
-    # never reached.
-    #
     # Empty = direct connection (works for dev; Cloudflare typically blocks
     # cloud egress IPs in prod).
-    hltv_proxy_urls: List[str] = Field(default_factory=list)
+    #
+    # NB: declared as ``str`` (not ``List[str]``) on purpose. pydantic-
+    # settings tries to JSON-decode List[str] env vars BEFORE any
+    # validator runs, which crashes on the human-friendly CSV form we
+    # want (``http://a,http://b``). Keeping it as a raw string and
+    # letting ``services.hltv_proxy_pool._parse_urls`` split it lets the
+    # operator paste the Webshare list directly without escaping.
+    hltv_proxy_urls: str = ""
     hltv_proxy_url: str = ""  # legacy single-proxy var; merged into the pool
     # How long an IP stays parked after a blocked / failed request, in
     # seconds. Default 30 min — enough that HLTV's per-IP rate-limit
@@ -146,49 +146,21 @@ class Settings(BaseSettings):
     # Tier-1/2 (S+/S/A/B) keep the proxy budget focused on demos people
     # actually want; C and Unclassified are ignored unless an admin clicks
     # "Import" manually. Comma-separated env: ``PRO_AUTO_TIERS=S+,S,A,B``.
-    pro_auto_tiers: List[str] = Field(
-        default_factory=lambda: ["S+", "S", "A", "B"]
-    )
+    # Same reason as ``hltv_proxy_urls`` for staying a plain string —
+    # pydantic-settings would otherwise demand JSON in the env value.
+    pro_auto_tiers: str = "S+,S,A,B"
     # How many HLTV imports may run at the same time. Webshare Static
     # Residential is one IP — keep this low so the proxy doesn't get rate-
     # limited and the parser doesn't fight itself for the CPU.
     pro_import_concurrency: int = 2
 
     # ------------------------------------------------------------------
-    # CSV-or-JSON parsing for the List[str] fields above.
-    #
-    # pydantic-settings' default behaviour for List[str] is "treat the env
-    # value as JSON and json.loads() it". For HLTV_PROXY_URLS that means
-    # the operator would have to set:
-    #     HLTV_PROXY_URLS=["http://...", "http://..."]
-    # which is awful to type by hand and easy to break. We accept the
-    # human-friendly comma- (or newline-) separated form instead, while
-    # still honoring a real JSON array if someone does send one.
-    #
-    # ``mode="before"`` runs BEFORE pydantic-settings tries its JSON parse,
-    # so a CSV value never reaches the failing json.loads() call.
+    # cors_origins is the one List[str] env we keep — operator-set values
+    # are short enough to JSON-escape comfortably (and prod already sets
+    # it that way). Lesson learned from HLTV_PROXY_URLS: don't reach for
+    # List[str] when the env value is going to be a long human-typed list
+    # — make it a plain string and split in the consumer.
     # ------------------------------------------------------------------
-    @field_validator(
-        "hltv_proxy_urls",
-        "pro_auto_tiers",
-        "cors_origins",
-        mode="before",
-    )
-    @classmethod
-    def _split_csv_list(cls, v):
-        if v is None or isinstance(v, list):
-            return v
-        if not isinstance(v, str):
-            return v
-        s = v.strip()
-        if not s:
-            return []
-        # JSON array — let pydantic handle it normally.
-        if s.startswith("["):
-            return s
-        # Otherwise split on commas OR newlines, drop empties.
-        parts = [p.strip() for p in re.split(r"[,\n]+", s)]
-        return [p for p in parts if p]
 
     # ------------------------------------------------------------------
     # Production safety net — refuse to boot with insecure defaults.

@@ -61,15 +61,15 @@ def _redact(url: str) -> str:
     return url
 
 
-def _parse_urls(raw_list: list[str], legacy_single: str) -> list[str]:
+def _parse_urls(raw, legacy_single: str) -> list[str]:
     """Normalise the operator's env input into a clean list of proxy URLs.
 
     Accepts:
-      - ``hltv_proxy_urls`` as a real list (when set via pydantic-settings
-        from a JSON env), or
-      - a single env value with commas / newlines / whitespace separating
-        the entries (Webshare's "Download list" gives one per line).
-    The legacy ``hltv_proxy_url`` single string is appended as a fallback
+      - a comma / whitespace / newline -separated string (the only form
+        operators actually use — Webshare's "Download list" gives one
+        per line and we documented CSV in ``.env.example``), or
+      - a real list (still supported for tests / programmatic config).
+    The legacy ``HLTV_PROXY_URL`` single string is appended as a fallback
     so old env setups keep working.
     """
     out: list[str] = []
@@ -82,9 +82,17 @@ def _parse_urls(raw_list: list[str], legacy_single: str) -> list[str]:
         seen.add(s)
         out.append(s)
 
-    for entry in raw_list or []:
-        # pydantic may give us a single comma-blob if the env was a string.
-        for part in re.split(r"[,\s]+", str(entry)):
+    # Normalise to a list of strings: caller may give us either a single
+    # blob (``"http://a,http://b"``) or an actual list.
+    entries: list[str]
+    if isinstance(raw, str):
+        entries = [raw]
+    elif raw is None:
+        entries = []
+    else:
+        entries = [str(x) for x in raw]
+    for entry in entries:
+        for part in re.split(r"[,\s]+", entry):
             _push(part)
     if legacy_single:
         _push(legacy_single)
