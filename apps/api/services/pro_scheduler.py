@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from db.database import SessionLocal
+from db.models.demo import Demo
 from db.models.pro_match import ProMatch
 from services.demo_sources import get_sources
 from core.settings import get_settings
@@ -75,6 +76,20 @@ SYNC_INTERVAL_SECONDS   = _env_int("PRO_SYNC_INTERVAL_SECONDS",  900)
 IMPORT_GAP_SECONDS      = _env_int("PRO_IMPORT_GAP_SECONDS",     60)
 MAX_IMPORTS_PER_TICK    = _env_int("PRO_MAX_IMPORTS_PER_TICK",   5)
 TICK_INTERVAL_SECONDS   = 30  # how often the loop wakes up
+# Serialise downloads behind parsing: after queueing a demo for the
+# worker, wait until every Demo linked to that ProMatch reaches a
+# terminal state (completed / failed) before scraping the next
+# candidate.  Stops parallel parses from competing for the 512 MB
+# Hobby budget and getting SIGKILL'd mid-parse (the "stuck at 90 %"
+# symptom on /pro).  Defaults ON; flip to "0" to restore the old
+# fire-and-forget behaviour.
+WAIT_FOR_PARSE          = _env_bool("PRO_WAIT_FOR_PARSE",        True)
+# Max time to spend waiting on a single match's parse before giving
+# up and moving on (Bo3 can be ~30 min; 60 min is a safe cap).
+PARSE_WAIT_TIMEOUT      = _env_int("PRO_PARSE_WAIT_TIMEOUT",     60 * 60)
+# Poll interval for the parse-status wait. 15 s keeps the DB hit
+# rate trivial while still feeling responsive.
+PARSE_POLL_SECONDS      = _env_int("PRO_PARSE_POLL_SECONDS",     15)
 
 # Initial 15 s grace so the API finishes booting + the DB
 # auto-migration in main.py runs first.
@@ -104,6 +119,8 @@ def scheduler_status() -> dict[str, Any]:
         "interval_seconds": SYNC_INTERVAL_SECONDS,
         "import_gap_seconds": IMPORT_GAP_SECONDS,
         "max_imports_per_tick": MAX_IMPORTS_PER_TICK,
+        "wait_for_parse": WAIT_FOR_PARSE,
+        "parse_wait_timeout_seconds": PARSE_WAIT_TIMEOUT,
         "index_from": get_pro_cutoff().isoformat(),
         # RAR extraction state — surfaces whether unrar is available
         # so the UI can warn the operator if HLTV's .rar demos are
@@ -324,6 +341,82 @@ async def _sync_step() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Parse-status wait — block scraping until the queued demo finishes
+# ---------------------------------------------------------------------------
+async def _wait_for_match_parsed(match_id: int, timeout_s: int) -> str:
+    """Poll Demo rows linked to ``match_id`` until every one reaches a
+    terminal status (``completed`` / ``failed``) or the timeout fires.
+
+    Returns:
+      "done"      — every linked Demo finished (any mix of completed
+                    and failed counts as done).
+      "timeout"   — at least one Demo was still ``processing`` /
+                    ``queued`` / ``uploaded`` when the deadline hit.
+      "no_demos"  — no Demo rows are linked to the match yet (the
+                    importer probably failed before persisting; we
+                    don't want to spin here).
+      "shutdown"  — the scheduler was asked to exit while waiting.
+    """
+    deadline = asyncio.get_event_loop().time() + max(60, timeout_s)
+    terminal = {"completed", "failed"}
+    last_logged: tuple | None = None
+
+    while True:
+        if _shutdown is not None and _shutdown.is_set():
+            return "shutdown"
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(Demo.id, Demo.status, Demo.processing_progress)
+                .filter(Demo.pro_match_id == match_id)
+                .all()
+            )
+        finally:
+            db.close()
+
+        if not rows:
+            # No demos linked yet — either the import failed before
+            # writing any Demo row, or the link hasn't landed yet.
+            # Give it one short retry window; if it's still empty,
+            # bail so we don't block the scheduler indefinitely.
+            await asyncio.sleep(min(10, PARSE_POLL_SECONDS))
+            db2 = SessionLocal()
+            try:
+                rows = (
+                    db2.query(Demo.id, Demo.status, Demo.processing_progress)
+                    .filter(Demo.pro_match_id == match_id)
+                    .all()
+                )
+            finally:
+                db2.close()
+            if not rows:
+                return "no_demos"
+
+        statuses = [(r.id, r.status, r.processing_progress) for r in rows]
+        non_terminal = [s for s in statuses if s[1] not in terminal]
+        # Log progress only when something CHANGED, so a 30-minute
+        # wait doesn't spam the logs every 15 s.
+        snapshot = tuple(sorted((s[0], s[1], s[2] or 0) for s in statuses))
+        if snapshot != last_logged:
+            logger.info(
+                "scheduler waiting on match %s parse: %s",
+                match_id,
+                ", ".join(f"demo {sid}={st}@{pp}%" for sid, st, pp in statuses),
+            )
+            last_logged = snapshot
+
+        if not non_terminal:
+            return "done"
+
+        if asyncio.get_event_loop().time() >= deadline:
+            return "timeout"
+
+        if await _wait_or_shutdown(PARSE_POLL_SECONDS):
+            return "shutdown"
+
+
+# ---------------------------------------------------------------------------
 # Import step — fire up to MAX_IMPORTS_PER_TICK imports, rate-limited.
 # ---------------------------------------------------------------------------
 async def _import_step() -> None:
@@ -411,10 +504,42 @@ async def _import_step() -> None:
                 )
             elif result.status == "download_failed":
                 errors += 1
-            # Rate-limit: wait BETWEEN imports, not after the last one.
-            if i < len(candidates) - 1:
-                if await _wait_or_shutdown(IMPORT_GAP_SECONDS):
+
+            # Serialise behind parsing when enabled: don't scrape the
+            # next candidate until the demo we just queued is fully
+            # parsed (completed or failed). This stops two parses
+            # from running in parallel and competing for RAM on the
+            # 512 MB Hobby worker — the OOM was the root cause of
+            # demos getting SIGKILL'd at 50-90 % and stuck in
+            # ``processing`` forever.
+            #
+            # Only meaningful when the import actually queued
+            # something for parsing. ``existing`` / ``invalid`` /
+            # ``download_failed`` results have nothing to wait on,
+            # so we fall through to the regular gap.
+            if WAIT_FOR_PARSE and result.status == "queued":
+                logger.info(
+                    "scheduler: blocking on match %s parse before next scrape "
+                    "(timeout=%ds)",
+                    match.id, PARSE_WAIT_TIMEOUT,
+                )
+                outcome = await _wait_for_match_parsed(match.id, PARSE_WAIT_TIMEOUT)
+                logger.info(
+                    "scheduler: match %s wait → %s", match.id, outcome,
+                )
+                if outcome == "shutdown":
                     break
+                # Tiny courtesy delay before the next HLTV hit even
+                # when we just waited 10+ min for parsing — keeps the
+                # proxy pool from looking burst-y to Cloudflare.
+                if i < len(candidates) - 1:
+                    if await _wait_or_shutdown(min(15, IMPORT_GAP_SECONDS)):
+                        break
+            else:
+                # Legacy fire-and-forget path — wait BETWEEN imports.
+                if i < len(candidates) - 1:
+                    if await _wait_or_shutdown(IMPORT_GAP_SECONDS):
+                        break
 
         _state["last_import_count"] = queued
         _state["last_import_errors"] = errors
