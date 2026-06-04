@@ -86,11 +86,40 @@ async def list_pro_matches(
     # Eager-load every Demo that's linked to one of these matches in a
     # single query, then bucket them by pro_match_id. Avoids the N+1 we'd
     # get from triggering a relationship lazy-load per match.
+    #
+    # CRITICAL: ``load_only`` restricts the SELECT to the columns the
+    # list serialiser actually touches. Without this, SQLAlchemy
+    # eagerly hydrates ``Demo.analysis_data`` (the per-frame timeline
+    # JSON — 50-200 MB per demo) on every /pro/matches request, which
+    # on a library of 50+ demos eats the 512 MB Railway Hobby budget
+    # in a single page load.  ``noload`` on the lazy="selectin"
+    # relationships (players / rounds / kills) stops the follow-up
+    # queries that would also drag tens of thousands of rows into
+    # memory just for the row chips.
+    from sqlalchemy.orm import load_only, noload
+
     match_ids = [r.id for r in rows]
     demos_by_match: dict[int, list[Demo]] = {}
     if match_ids:
         demos = (
             db.query(Demo)
+            .options(
+                load_only(
+                    Demo.id,
+                    Demo.pro_match_id,
+                    Demo.map_name,
+                    Demo.filename,
+                    Demo.status,
+                    Demo.processing_progress,
+                    Demo.score_a,
+                    Demo.score_b,
+                    Demo.duration_seconds,
+                    Demo.error_message,
+                ),
+                noload(Demo.players),
+                noload(Demo.rounds),
+                noload(Demo.kills),
+            )
             .filter(Demo.pro_match_id.in_(match_ids))
             .order_by(Demo.id.asc())
             .all()

@@ -77,7 +77,23 @@ async def list_demos(
     Anonymous callers receive 401 from ``get_current_user`` before
     reaching this function.
     """
-    q = db.query(Demo).order_by(Demo.id.desc())
+    # Defer the heavy ``analysis_data`` JSON blob — DemoSummary doesn't
+    # need it, but the default SELECT would drag 50-200 MB per row into
+    # memory on every list call. Same noload pattern as /pro/matches:
+    # the lazy="selectin" relationships would also fire follow-up
+    # queries for players / rounds / kills we don't serialise here.
+    from sqlalchemy.orm import defer, noload
+
+    q = (
+        db.query(Demo)
+        .options(
+            defer(Demo.analysis_data),
+            noload(Demo.players),
+            noload(Demo.rounds),
+            noload(Demo.kills),
+        )
+        .order_by(Demo.id.desc())
+    )
     if not current_user.is_admin:
         q = q.filter(Demo.user_id == current_user.id)
     demos = q.all()
@@ -275,7 +291,24 @@ async def get_demo_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    demo = db.query(Demo).filter(Demo.id == demo_id).first()
+    # Status is polled every 5 s while a demo is processing. Loading
+    # ``analysis_data`` (50-200 MB JSON) on every poll is what made
+    # the worker OOM under sustained polling — defer it. Same noload
+    # treatment for the lazy="selectin" relations so we don't trigger
+    # extra queries for data we never read in this endpoint.
+    from sqlalchemy.orm import defer, noload
+
+    demo = (
+        db.query(Demo)
+        .options(
+            defer(Demo.analysis_data),
+            noload(Demo.players),
+            noload(Demo.rounds),
+            noload(Demo.kills),
+        )
+        .filter(Demo.id == demo_id)
+        .first()
+    )
     if not demo:
         raise HTTPException(status_code=404, detail="Demo not found")
     _check_demo_access(demo, current_user)

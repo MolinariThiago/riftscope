@@ -488,6 +488,17 @@ async def process_demo(demo_id: int, file_path: str) -> None:
             "[download=%.1fs parse=%.1fs persist=%.1fs]",
             demo_id, total_elapsed, dl_elapsed, parse_elapsed, persist_elapsed,
         )
+        # CRITICAL on Railway Hobby (512 MB): drop every reference to
+        # the parsed analysis dict + frame data BEFORE returning so the
+        # cycle GC has nothing held alive across the next demo. Each
+        # ``analysis`` dict carries the full per-tick timeline (hundreds
+        # of MB on a Bo3) — without this, the worker process heap stays
+        # at the high-water mark forever and the next parse starts
+        # already close to the OOM line.
+        del analysis
+        del meta
+        import gc as _gc
+        _gc.collect()
 
     except Exception as exc:  # pragma: no cover — defensive
         elapsed = _time.perf_counter() - t0
