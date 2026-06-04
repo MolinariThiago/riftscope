@@ -21,7 +21,7 @@ export function LandingHero() {
           <motion.div variants={fadeUp} className="flex justify-center">
             <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-border bg-surface text-xs font-semibold text-muted-foreground font-mono-rs tracking-wider">
               <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-              CS2 DEMO ANALYTICS
+              R00 — START HERE
             </span>
           </motion.div>
 

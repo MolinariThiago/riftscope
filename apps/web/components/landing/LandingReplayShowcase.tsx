@@ -26,6 +26,13 @@ export function LandingReplayShowcase() {
           whileInView="show"
           viewport={inViewport}
         >
+          <motion.span
+            variants={fadeUp}
+            className="inline-flex items-center gap-2 mb-4 text-[11px] font-mono-rs uppercase tracking-wider text-primary"
+          >
+            <span className="h-1 w-6 bg-primary" />
+            R03 — CORE ANALYSIS
+          </motion.span>
           <motion.h2 variants={fadeUp} className="text-3xl lg:text-4xl font-display font-bold mb-4">
             Replay every round, <span className="gradient-text">in 2D.</span>
           </motion.h2>

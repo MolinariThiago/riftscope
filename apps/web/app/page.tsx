@@ -5,7 +5,24 @@ import { LandingHero } from "@/components/landing/LandingHero";
 import { LandingReplayShowcase } from "@/components/landing/LandingReplayShowcase";
 import { LandingFeatures } from "@/components/landing/LandingFeatures";
 import { LandingCTA } from "@/components/landing/LandingCTA";
+import {
+  LandingFAQ,
+  LandingLeaderboards,
+  LandingProMatches,
+  LandingTactical,
+  LandingWhatsNew,
+} from "@/components/landing/LandingModules";
 
+// Tactical landing flow (cs2.cam-inspired R-series):
+//   R00 — Hero (start here)
+//   R02 — What's new (recent additions)
+//   R03 — Core analysis (replay showcase + advanced stats)
+//   R04 — Pro matches (auto-import, tier filter, Bo3)
+//   R05 — Leaderboards (HLTV 2.0 across the corpus)
+//   R06 — Tactical board + playbook
+//   R09 — FAQ
+// Section labels live INSIDE each component so the page-level
+// composition stays a thin shell.
 export default function HomePage() {
   return (
     <div className="relative min-h-screen">
@@ -17,8 +34,13 @@ export default function HomePage() {
 
       <LandingNav />
       <LandingHero />
+      <LandingWhatsNew />
       <LandingReplayShowcase />
       <LandingFeatures />
+      <LandingProMatches />
+      <LandingLeaderboards />
+      <LandingTactical />
+      <LandingFAQ />
       <LandingCTA />
       <LandingFooter />
     </div>
