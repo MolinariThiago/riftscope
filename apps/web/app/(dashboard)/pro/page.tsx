@@ -10,7 +10,7 @@ import {
   ChevronDown,
   Download,
   ExternalLink,
-  Globe,
+  RotateCcw,
   Loader2,
   PlayCircle,
   Plus,
@@ -75,8 +75,14 @@ export default function ProMatchesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
 
-  const proxyTest = useMutation({
-    mutationFn: () => api.pro.testProxy(),
+  // Reset demos stuck in ``processing`` for >30 min. The worker is
+  // SIGKILL'd mid-parse on Railway Hobby OOM and the exception path
+  // never runs, so the row stays "processing" forever and the card
+  // spins. This button is the manual recovery — see backend
+  // ``routers/admin.py::admin_reset_stuck_demos``.
+  const resetStuck = useMutation({
+    mutationFn: () => api.admin.resetStuckDemos(30),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
 
   const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false);
@@ -226,9 +232,9 @@ export default function ProMatchesPage() {
               </button>
             )}
             <button
-              onClick={() => proxyTest.mutate()}
-              disabled={proxyTest.isPending}
-              title="Verifica que el proxy configurado en .env esté ruteando tráfico"
+              onClick={() => resetStuck.mutate()}
+              disabled={resetStuck.isPending}
+              title="Marca como fallidas las demos colgadas en 'processing' por más de 30 min (libera la UI cuando el worker fue OOM-killed mid-parse)"
               className={cn(
                 "inline-flex items-center gap-2 px-3 py-2.5 rounded-lg",
                 "bg-surface-elevated text-foreground/80 text-xs font-semibold border border-border",
@@ -236,12 +242,12 @@ export default function ProMatchesPage() {
                 "disabled:opacity-50 transition-colors whitespace-nowrap",
               )}
             >
-              {proxyTest.isPending ? (
+              {resetStuck.isPending ? (
                 <Loader2 size={13} className="animate-spin" />
               ) : (
-                <Globe size={13} />
+                <RotateCcw size={13} />
               )}
-              Probar proxy
+              Reset atascadas
             </button>
             <button
               onClick={() => sync.mutate()}
@@ -333,50 +339,40 @@ export default function ProMatchesPage() {
               <span>unrar no disponible · demos .rar quedan sin extraer</span>
             </div>
           )}
-          {/* Proxy-test result — shown after the user clicks "Probar
-              proxy". Three states: success (green), proxy-not-set
-              (gray), or error (red). Helps validate paid-proxy
-              credentials BEFORE depending on them for scheduler runs. */}
-          {proxyTest.data && (
+          {/* Reset result — shown after the user clicks "Reset
+              atascadas". Green chip with the counts when something
+              was actually unstuck; muted chip when nothing matched
+              the cutoff (the happy path on a healthy worker). */}
+          {resetStuck.data && (
             <div
               className={cn(
                 "inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md",
-                proxyTest.data.proxy_ok
+                resetStuck.data.demosReset > 0
                   ? "bg-win/10 border border-win/30 text-win"
-                  : proxyTest.data.configured == null
-                    ? "bg-surface-elevated border border-border text-muted-foreground"
-                    : "bg-loss/10 border border-loss/30 text-loss",
+                  : "bg-surface-elevated border border-border text-muted-foreground",
               )}
             >
-              {proxyTest.data.proxy_ok ? (
-                <>
-                  <CheckCircle2 size={11} />
-                  <span>
-                    Proxy OK · sale por{" "}
-                    <span className="text-foreground">{proxyTest.data.proxy_ip}</span>
-                    {proxyTest.data.proxy_latency_ms != null && (
-                      <> · {proxyTest.data.proxy_latency_ms}ms</>
-                    )}
-                  </span>
-                </>
-              ) : proxyTest.data.configured == null ? (
-                <>
-                  <AlertCircle size={11} />
-                  <span>
-                    No hay proxy configurado · directo desde{" "}
-                    <span className="text-foreground">
-                      {proxyTest.data.direct_ip ?? "?"}
-                    </span>
-                  </span>
-                </>
+              <CheckCircle2 size={11} />
+              {resetStuck.data.demosReset > 0 ? (
+                <span>
+                  Liberadas{" "}
+                  <span className="text-foreground">{resetStuck.data.demosReset}</span>{" "}
+                  demos atascadas
+                  {resetStuck.data.matchesReset > 0 && (
+                    <>
+                      {" "}· {resetStuck.data.matchesReset} matches reseteados
+                    </>
+                  )}
+                </span>
               ) : (
-                <>
-                  <AlertCircle size={11} />
-                  <span>
-                    Proxy falló · {proxyTest.data.errors[0] ?? "ver logs"}
-                  </span>
-                </>
+                <span>Sin demos atascadas hace +30 min</span>
               )}
+            </div>
+          )}
+          {resetStuck.isError && (
+            <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-loss/10 border border-loss/30 text-loss">
+              <AlertCircle size={11} />
+              <span>Reset falló · ver logs</span>
             </div>
           )}
           {sync.data && (
