@@ -1,10 +1,9 @@
 "use client";
 
 // Tactical landing modules — R02 / R04 / R05 / R06 / R09.
-// Each section is a numbered "rXX" tag (cs2.cam-inspired) with a
-// noun-phrase title and 3-6 module cards or list items underneath.
-// Copy explains WHAT each thing is for and HOW to use it — no code,
-// no implementation talk.
+// Copy is strictly user-facing: what each module does for you,
+// how to use it, why it's useful. No mentions of admin buttons,
+// no infrastructure, no formulas.
 
 import Link from "next/link";
 import { motion } from "framer-motion";
@@ -12,7 +11,6 @@ import {
   ArrowRight,
   BarChart3,
   ChevronDown,
-  ClipboardList,
   Crosshair,
   Filter,
   Layers,
@@ -109,34 +107,29 @@ function ModuleCard({
 
 // ===========================================================================
 // R02 — WHAT'S NEW
-// Recent additions, listed with a tiny chip badge per entry.
+// Recent additions, framed by USER BENEFIT, not implementation.
 // ===========================================================================
 export function LandingWhatsNew() {
   const items = [
     {
       badge: "NEW",
       title: "Leaderboards (beta)",
-      desc: "HLTV-Rating-2.0-style ranking across every analyzed demo. Filter by map, date range, minimum rounds.",
+      desc: "See the top pros ranked across every match on the site. Filter by map, time window and minimum rounds to find the form players on Inferno this month — not just all-time legends.",
     },
     {
       badge: "NEW",
-      title: "Tier-priority auto-import",
-      desc: "Major matches (S+) land before tier-1 regionals (S/A), so the most important demos are always queued first.",
+      title: "Bo3 / Bo5 series, every map",
+      desc: "Pro series cards expand to show every map played. No more scrolling past the second game of a final — every map of the series has its own Ver-en-2D button right there.",
+    },
+    {
+      badge: "UPDATE",
+      title: "Sharper player stats",
+      desc: "Damage, KAST, assists and utility are now measured directly from the demo, not estimated. Numbers you see on a card match what HLTV would report for the same match.",
     },
     {
       badge: "NEW",
-      title: "Daily download budget",
-      desc: "Caps how many GB of demos the auto-importer pulls per day. Stops the proxy quota from burning out mid-month.",
-    },
-    {
-      badge: "UPDATE",
-      title: "Bo3 series, every map",
-      desc: "Bo3 / Bo5 matches now show every map of the series in /pro, each with its own Ver-en-2D button.",
-    },
-    {
-      badge: "UPDATE",
-      title: "Real ADR / KAST / utility",
-      desc: "Parser now pulls per-tick damage and assist events directly — no more formula estimates.",
+      title: "Filter by map, team or event",
+      desc: "The pro feed now has dropdown filters so you can narrow to \"every G2 match on Mirage this month\" or \"every Major final\" without scrolling.",
     },
   ];
   return (
@@ -147,7 +140,7 @@ export function LandingWhatsNew() {
           Recent <span className="gradient-text">additions.</span>
         </>
       }
-      lede="The most recent modules and improvements shipped to RIFTSCOPE."
+      lede="The freshest modules and improvements — straight to what changed for you."
     >
       <div className="space-y-3">
         {items.map((it) => (
@@ -183,7 +176,6 @@ export function LandingWhatsNew() {
 
 // ===========================================================================
 // R04 — PRO MATCHES
-// Pro feed, auto-importer, tier filter, Bo3 series.
 // ===========================================================================
 export function LandingProMatches() {
   return (
@@ -194,44 +186,44 @@ export function LandingProMatches() {
           Every pro match, <span className="gradient-text">ready to watch.</span>
         </>
       }
-      lede="An auto-curated feed of pro CS2 matches discovered from HLTV. Filtered by tier and downloaded automatically — open any imported map and watch it in 2D."
+      lede="A curated feed of pro CS2 matches you can open in 2D in one click. No demo hunting, no torrents — open the page, pick a match, watch."
     >
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <ModuleCard
           icon={Trophy}
           tone="primary"
-          title="Auto-discovered feed"
-          desc="The pro feed updates every 30 minutes from HLTV's results page. New matches appear with the score, event and tier already filled in."
+          title="Always fresh"
+          desc="The feed stays up to date with recent pro matches as they finish — finals, regular season, qualifiers."
         />
         <ModuleCard
           icon={Star}
           tone="accent"
-          title="Tier filtering"
-          desc="Default importer pulls S+ Majors, S tier-1 finals and A regionals first. C-tier scrims are excluded so the proxy budget goes to matches that matter."
+          title="Majors first"
+          desc="Sorted by importance. Majors and tier-1 finals always land before regional cups so the matches you care about are on top."
         />
         <ModuleCard
           icon={Layers}
           tone="win"
-          title="Bo3 / Bo5 series"
-          desc="Series cards expand to show every map played, each with its own status chip and Ver-en-2D button. No need to chase individual demos."
+          title="Bo3 / Bo5 expanded"
+          desc="Series cards show every map of the series with its own status chip and Ver-en-2D button. No need to chase individual games."
         />
         <ModuleCard
           icon={Filter}
           tone="primary"
-          title="Filters that work"
-          desc="Filter the feed by map (active CS2 pool), team or tournament. Card chips stay in sync so you can drill down without losing context."
+          title="Filters that matter"
+          desc="Narrow the feed by map (the active CS2 pool), team or tournament. Stack filters to find exactly the matchup you want."
         />
         <ModuleCard
           icon={Timer}
           tone="ct"
-          title="Daily budget"
-          desc="Set a GB-per-day cap and the scheduler stops pulling when it hits the line. Resets at 00:00 UTC — your proxy quota survives the month."
+          title="See it as it lands"
+          desc="A match imported and parsed shows up with a Lista-para-2D chip. Hit it and you're inside the replay viewer instantly."
         />
         <ModuleCard
           icon={Zap}
           tone="tt"
-          title="One-click recovery"
-          desc="If a demo gets stuck or the bytes go missing, hit Reset atascadas / Reintentar fallidas in the admin header. The scheduler picks them up first on the next tick."
+          title="Built for browsing"
+          desc="Counters at the top tell you at a glance how many matches are watchable right now, how many are queued, and how many total are in the library."
         />
       </div>
     </SectionShell>
@@ -240,7 +232,6 @@ export function LandingProMatches() {
 
 // ===========================================================================
 // R05 — LEADERBOARDS
-// HLTV 2.0 rating across the corpus.
 // ===========================================================================
 export function LandingLeaderboards() {
   return (
@@ -248,35 +239,35 @@ export function LandingLeaderboards() {
       tag="R05 — LEADERBOARDS"
       title={
         <>
-          Top players, <span className="gradient-text">HLTV 2.0 rated.</span>
+          Top players, <span className="gradient-text">ranked honestly.</span>
         </>
       }
-      lede="A single ranking across every analyzed demo, computed with the public HLTV Rating 2.0 formula. Filter by map, date range and round count — same metric you see on csstats and bo3.gg."
+      lede="One ranking across every pro match on the site. The same metric the community recognises — rating, ADR, K/D, KAST — computed from real in-game data."
     >
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <ModuleCard
           icon={BarChart3}
           tone="primary"
-          title="Rating 2.0 formula"
-          desc="0.0073·KAST + 0.3591·KPR − 0.5329·DPR + 0.2372·Impact + 0.0032·ADR + 0.1587. Reproducible and tied to real per-tick data."
+          title="The metric you know"
+          desc="Industry-standard HLTV-style rating. Reproducible, comparable to what you see on every other CS2 stats site."
         />
         <ModuleCard
           icon={Map}
           tone="accent"
-          title="Map filter"
-          desc="Pill bar with the active CS2 pool (Mirage, Dust2, Inferno, Ancient, Nuke, Overpass, Train, Vertigo, Anubis, Cache). All map for the global table."
+          title="Per-map ranking"
+          desc="Pill bar with every active CS2 pool map. Find the best Mirage player, the best Anubis Awper, the cleanest Inferno entry."
         />
         <ModuleCard
           icon={Timer}
           tone="ct"
-          title="Date range + min rounds"
-          desc="Time windows of 30d, 90d, 12m or all-time. Minimum-rounds slider stops small-sample players from inflating the top."
+          title="Form vs all-time"
+          desc="30d / 90d / 12m / All-time windows. Toggle between current form and historic legends without leaving the page."
         />
         <ModuleCard
           icon={Sparkles}
           tone="win"
-          title="Real columns"
-          desc="Rank, player, rating, ADR, K/D, KPR, DPR, KAST, UDR (utility / round), FAR (flash assists / round), rounds. Sort, search, pin."
+          title="Honest sample size"
+          desc="Minimum-rounds slider keeps small-sample one-game wonders out of the top. A player has to actually play to rank."
         />
       </div>
     </SectionShell>
@@ -285,7 +276,6 @@ export function LandingLeaderboards() {
 
 // ===========================================================================
 // R06 — TACTICAL BOARD + PLAYBOOK
-// Strategic planner.
 // ===========================================================================
 export function LandingTactical() {
   return (
@@ -293,47 +283,47 @@ export function LandingTactical() {
       tag="R06 — TACTICAL BOARD"
       title={
         <>
-          Draw, save, <span className="gradient-text">share.</span>
+          Draw it, <span className="gradient-text">save it, run it.</span>
         </>
       }
-      lede="A top-down board with the real CS2 maps. Plot smokes, flashes, rotations and pick orders, then save the result to a Playbook for your team."
+      lede="A top-down board with the real CS2 maps. Plot smokes and flashes, draw rotations, set up an execute — then save it to your playbook so your team can run it next scrim."
     >
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <ModuleCard
           icon={PenTool}
           tone="primary"
-          title="2D map planner"
-          desc="Pick a map, drop players on each side, draw arrows for rotations and grenade arcs. Snap-to-grid and per-side colors so the diagram reads at a glance."
-        />
-        <ModuleCard
-          icon={Library}
-          tone="accent"
-          title="Playbook folders"
-          desc="Group tactics by team, role or map veto outcome. Each saved tactic carries its diagram, notes and tags — searchable from the dashboard."
+          title="Real maps, top-down"
+          desc="Pick a map, drop the five players for each side. Snap-to-grid and per-side colors so the diagram reads at a glance."
         />
         <ModuleCard
           icon={Target}
           tone="tt"
-          title="Map-specific layers"
-          desc="Common smoke / flash spots come pre-loaded per map so you don't redraw the same lineups every session. Add your own and reuse across plays."
+          title="Real utility radius"
+          desc="Smoke, flash and molotov markers render with the actual area they cover on that map. Trust what you draw."
         />
         <ModuleCard
           icon={ListChecks}
           tone="win"
-          title="Steps + sequencing"
-          desc="A tactic is a sequence of frames — t=0 (initial setup), t=1 (smokes thrown), t=2 (entry). Step through them in the viewer or share the full sequence."
+          title="Step by step"
+          desc="A tactic is a sequence: setup → smokes → entry. Add frames to capture each moment without redrawing the previous one."
+        />
+        <ModuleCard
+          icon={Library}
+          tone="accent"
+          title="Saved to your playbook"
+          desc="Drop a finished tactic into a folder, add tags (map, side, anti-eco, A execute). Search across them later by name or tag."
         />
         <ModuleCard
           icon={Crosshair}
           tone="ct"
-          title="Anti-strat suite"
-          desc="Veto analysis, opponent prep and pre-match reports built on top of the playbook. Admin-only while in beta — switching to public soon."
+          title="Pulled from real rounds"
+          desc="Find a round in the viewer worth remembering? Snapshot it directly into a tactic — positions and utility are pre-filled from that exact moment."
         />
         <ModuleCard
-          icon={ClipboardList}
+          icon={Trophy}
           tone="primary"
-          title="Round tactics linking"
-          desc="When you find a round you want to remember, drop it into a tactic so the playbook always points back to the actual replay."
+          title="Built for teams"
+          desc="A shared playbook for your team means everyone references the same diagrams in practice. No more 'the spot you did last week, you know'."
         />
       </div>
     </SectionShell>
@@ -342,36 +332,35 @@ export function LandingTactical() {
 
 // ===========================================================================
 // R09 — FAQ
-// Real questions with short, honest answers.
 // ===========================================================================
 const FAQ: { q: string; a: string }[] = [
   {
-    q: "What demos work?",
-    a: "Any .dem from CS2 — matchmaking, FACEIT, ESEA, pro tournaments. We also accept .rar / .zip archives that bundle a Bo3 or Bo5 series; each .dem inside gets extracted and parsed separately.",
+    q: "What demos can I upload?",
+    a: "Any standard CS2 demo (.dem file) — matchmaking, FACEIT, ESEA, or a pro demo you grabbed yourself. Series archives that bundle multiple maps work too: every map inside becomes its own analysed game.",
   },
   {
-    q: "How long does parsing take?",
-    a: "Roughly 2-10 minutes per demo depending on length and how much utility was used. A typical Bo3 series finishes in 15-25 minutes total. Progress is visible in /demos and in the pro card chip.",
+    q: "How long until my demo is ready?",
+    a: "Usually 2 to 10 minutes per game, depending on its length. A typical Bo3 series finishes in about 15 to 25 minutes. You'll see live progress in your demo list while it processes.",
   },
   {
     q: "Is it free?",
-    a: "RIFTSCOPE is in beta and currently free to use. Pro demos are auto-imported and parsed at our cost. Pricing tiers will land when the corpus is bigger and the AI insights ship.",
+    a: "Yes, RIFTSCOPE is free during beta. Pro matches are analysed and watchable at no cost. Paid tiers will arrive later when the library is fully built out.",
   },
   {
     q: "Where do the pro matches come from?",
-    a: "HLTV's results page is scraped every 30 minutes through a residential proxy pool. Matches are tagged by the importance stars HLTV displays (5★ = Major, 4★ = tier-1 finals, etc.) and downloaded in tier order.",
+    a: "From real tournament demos — Majors, regional finals, league play, online cups. New matches are added automatically as events finish so the library stays current with the scene.",
   },
   {
-    q: "What is HLTV Rating 2.0?",
-    a: "The public, reproducible rating formula HLTV introduced in 2018 and still ships under the hood of Rating 3.0. Linear combination of KAST, KPR, DPR, ADR and Impact. We compute it server-side from real per-tick events, not formula estimates.",
+    q: "What does the rating actually mean?",
+    a: "It's the community-standard CS2 player rating you already know from sites like HLTV. Higher is better; around 1.00 is average and anything over 1.10 is strong. Calculated from real in-game performance, not estimates.",
   },
   {
-    q: "Are my private demos public?",
-    a: "No. Demos uploaded by a logged-in account are scoped to that account — only you (and admins) can see them. Pro matches are public because they're already public on HLTV.",
+    q: "Are my private demos visible to other people?",
+    a: "No. A demo you upload is yours alone — only your account can see it. Pro matches are public because they're already public events.",
   },
   {
-    q: "Can I share a specific round / clip?",
-    a: "Per-round sharable links are coming. The 2D viewer already has the state needed; we're packaging it as a permalink with social-card previews.",
+    q: "Can I share a specific round or clutch with a friend?",
+    a: "Per-round share links are on the way. The viewer already knows how to jump to a specific round; we're packaging that as a copy-paste URL with social-card previews so a Discord drop shows the moment, not just a link.",
   },
 ];
 
@@ -384,7 +373,7 @@ export function LandingFAQ() {
           Common <span className="gradient-text">questions.</span>
         </>
       }
-      lede="Honest, short answers. If something's missing, find us on Discord or open an issue on GitHub."
+      lede="Quick, plain answers. If something's missing, find us on Discord."
     >
       <div className="space-y-2">
         {FAQ.map((item, i) => (
