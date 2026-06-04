@@ -36,6 +36,19 @@ import type {
   LeaderboardResponse,
 } from "@/types/leaderboards";
 
+// API base URL.
+//
+// Production (Vercel): set ``NEXT_PUBLIC_API_URL=/api`` so every
+// request goes to ``${vercel-domain}/api/...``, which the Next.js
+// rewrite in ``next.config.js`` proxies to the Railway backend.
+// Because the browser sees these as same-origin, the session cookie
+// gets stored against the Vercel domain (first-party) and survives
+// tab closes — the cross-site cookie problem the user was hitting
+// where Safari / Chrome-3PCD silently dropped the cookie every time.
+//
+// Local dev: leave NEXT_PUBLIC_API_URL unset (or =http://localhost:8000)
+// — the rewrite is a no-op in dev (BACKEND_URL is also unset), and
+// the frontend talks straight to the Python dev server.
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
