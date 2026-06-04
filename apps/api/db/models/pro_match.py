@@ -10,6 +10,7 @@ Separated from Demo because:
 """
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
     ForeignKey,
@@ -73,6 +74,16 @@ class ProMatch(Base):
     import_status = Column(String, nullable=True)
     import_error = Column(String, nullable=True)
 
+    # Download accounting — feeds the daily budget cap in the scheduler.
+    # ``import_bytes`` is the .rar / .zip size pulled from HLTV (NOT the
+    # uncompressed .dem size — what matters for the proxy budget is what
+    # actually came over the wire).  ``import_completed_at`` is when
+    # the download finished, so the scheduler can sum
+    # ``SUM(import_bytes) WHERE import_completed_at >= today_utc``
+    # to enforce ``PRO_DAILY_DOWNLOAD_LIMIT_GB``.
+    import_bytes = Column(BigInteger, nullable=True, index=True)
+    import_completed_at = Column(DateTime, nullable=True, index=True)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -93,4 +104,8 @@ class ProMatch(Base):
             "demoId": self.demo_id,
             "importStatus": self.import_status,
             "importError": self.import_error,
+            "importBytes": self.import_bytes,
+            "importCompletedAt": (
+                self.import_completed_at.isoformat() if self.import_completed_at else None
+            ),
         }

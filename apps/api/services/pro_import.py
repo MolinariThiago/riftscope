@@ -392,8 +392,21 @@ async def _import_match_demo_inner(
             )
             _check_response(r, "demo download")
             body = r.content
-            
-            logger.info("Descarga completada con éxito. Procesando archivo...")
+
+            # Record the on-the-wire byte count so the scheduler's daily
+            # budget cap (``PRO_DAILY_DOWNLOAD_LIMIT_GB``) can see this
+            # download against today's total. We stamp BEFORE the slow
+            # archive-extraction step so the budget reflects bytes that
+            # already burned the proxy quota even if extraction crashes
+            # later.  Persisted at the next db.commit() in the persist
+            # path below — match is in the same session.
+            from core.utc import utcnow_naive as _utcnow_naive
+            match.import_bytes = len(body)
+            match.import_completed_at = _utcnow_naive()
+            logger.info(
+                "Descarga completada (%s MB). Procesando archivo...",
+                round(len(body) / (1024 * 1024), 1),
+            )
 
     except _Blocked:
         # Already classified as a per-IP block by the explicit checks

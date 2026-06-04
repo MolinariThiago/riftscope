@@ -99,6 +99,23 @@ def _ensure_steam_columns() -> None:
                         text(f"ALTER TABLE pro_matches ADD COLUMN {col_name} VARCHAR")
                     )
                     logger.info("migrated pro_matches table: added %s", col_name)
+        # Download-accounting columns — feed the daily PRO_DAILY_DOWNLOAD_LIMIT_GB
+        # budget in the scheduler. ``import_bytes`` is BIGINT because demos
+        # routinely run into the hundreds of MB and total a year can hit
+        # tens of GB. ``import_completed_at`` is the timestamp the scheduler
+        # uses to filter "downloaded in the current UTC day".
+        if "import_bytes" not in existing_pm:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE pro_matches ADD COLUMN import_bytes BIGINT")
+                )
+                logger.info("migrated pro_matches table: added import_bytes")
+        if "import_completed_at" not in existing_pm:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE pro_matches ADD COLUMN import_completed_at TIMESTAMP")
+                )
+                logger.info("migrated pro_matches table: added import_completed_at")
 
     # Playbook: type + tags columns added after the table first shipped.
     if "playbooks" in insp.get_table_names():

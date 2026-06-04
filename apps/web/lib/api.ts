@@ -356,6 +356,19 @@ export const api = {
          *  yellow banner so users know why no new matches are flowing
          *  in — it's the source, not a bug on our side. */
         liquipedia_cooldown_seconds: number;
+        /** Daily download budget — caps demo bytes pulled from HLTV in
+         *  a single UTC day so the residential proxy quota lasts the
+         *  month. ``exhausted=true`` means the scheduler is parked
+         *  until 00:00 UTC. */
+        daily_budget: {
+          limit_gb: number;
+          used_bytes: number;
+          used_gb: number;
+          remaining_bytes: number | null;
+          remaining_gb: number | null;
+          exhausted: boolean;
+          day_start_utc: string;
+        };
       }>("/pro/scheduler/status"),
   },
 

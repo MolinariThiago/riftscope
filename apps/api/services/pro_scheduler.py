@@ -90,6 +90,31 @@ PARSE_WAIT_TIMEOUT      = _env_int("PRO_PARSE_WAIT_TIMEOUT",     60 * 60)
 # Poll interval for the parse-status wait. 15 s keeps the DB hit
 # rate trivial while still feeling responsive.
 PARSE_POLL_SECONDS      = _env_int("PRO_PARSE_POLL_SECONDS",     15)
+# Daily download budget — caps the bytes the scheduler will pull
+# from HLTV in a single UTC day. The point is the residential proxy
+# pool: each IP has a monthly bandwidth quota and burning through
+# it in 4 days kills the auto-importer for the rest of the month.
+# 10 GB / day = ~300 GB / month which is the typical Webshare
+# Static Residential allowance for a small pool. Set to 0 to
+# disable the cap entirely.
+DAILY_DOWNLOAD_LIMIT_GB = _env_int("PRO_DAILY_DOWNLOAD_LIMIT_GB", 10)
+
+
+# Tier priority for candidate ordering. Lower number = higher
+# priority. We always prefer S+ over S over A over B over C —
+# guarantees the budget gets spent on the most important matches
+# first instead of N random low-tier scrims squeezing out the Major
+# final because they happened to land in the same tick.  Matches
+# with NULL tier sit at the bottom so they only get picked up after
+# every classified match in the allowed set is done.
+_TIER_PRIORITY: dict[str | None, int] = {
+    "S+": 0,
+    "S": 1,
+    "A": 2,
+    "B": 3,
+    "C": 4,
+    None: 99,
+}
 
 # Initial 15 s grace so the API finishes booting + the DB
 # auto-migration in main.py runs first.
@@ -121,6 +146,7 @@ def scheduler_status() -> dict[str, Any]:
         "max_imports_per_tick": MAX_IMPORTS_PER_TICK,
         "wait_for_parse": WAIT_FOR_PARSE,
         "parse_wait_timeout_seconds": PARSE_WAIT_TIMEOUT,
+        "daily_budget": _budget_snapshot(),
         "index_from": get_pro_cutoff().isoformat(),
         # RAR extraction state — surfaces whether unrar is available
         # so the UI can warn the operator if HLTV's .rar demos are
@@ -341,6 +367,49 @@ async def _sync_step() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Daily download budget — sum bytes pulled from HLTV today (UTC)
+# ---------------------------------------------------------------------------
+def _utc_day_start() -> datetime:
+    """First instant of the current UTC day, naive (matches the DB stamp)."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime(now.year, now.month, now.day)
+
+
+def _bytes_downloaded_today() -> int:
+    """Sum of ``import_bytes`` for downloads completed in this UTC day."""
+    from sqlalchemy import func as _f
+
+    day_start = _utc_day_start()
+    db = SessionLocal()
+    try:
+        total = (
+            db.query(_f.coalesce(_f.sum(ProMatch.import_bytes), 0))
+            .filter(ProMatch.import_completed_at >= day_start)
+            .scalar()
+        )
+        return int(total or 0)
+    finally:
+        db.close()
+
+
+def _budget_snapshot() -> dict[str, Any]:
+    """Public view of today's download spend (for scheduler_status)."""
+    used = _bytes_downloaded_today()
+    limit_bytes = DAILY_DOWNLOAD_LIMIT_GB * (1024 ** 3) if DAILY_DOWNLOAD_LIMIT_GB > 0 else 0
+    return {
+        "limit_gb": DAILY_DOWNLOAD_LIMIT_GB,
+        "used_bytes": used,
+        "used_gb": round(used / (1024 ** 3), 2),
+        "remaining_bytes": max(0, limit_bytes - used) if limit_bytes else None,
+        "remaining_gb": (
+            round(max(0, limit_bytes - used) / (1024 ** 3), 2) if limit_bytes else None
+        ),
+        "exhausted": bool(limit_bytes and used >= limit_bytes),
+        "day_start_utc": _utc_day_start().isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Parse-status wait — block scraping until the queued demo finishes
 # ---------------------------------------------------------------------------
 async def _wait_for_match_parsed(match_id: int, timeout_s: int) -> str:
@@ -421,6 +490,28 @@ async def _wait_for_match_parsed(match_id: int, timeout_s: int) -> str:
 # ---------------------------------------------------------------------------
 async def _import_step() -> None:
     cutoff = pro_cutoff_naive()
+
+    # ---- Daily download budget gate ---------------------------------
+    # Burn-rate check before we even open the candidate query: if
+    # we've already pulled DAILY_DOWNLOAD_LIMIT_GB worth of demos in
+    # the current UTC day, skip this tick entirely. The proxy quota
+    # is what we're protecting — going over means the pool burns its
+    # monthly allowance and the auto-importer goes dark for the
+    # remainder of the month.
+    if DAILY_DOWNLOAD_LIMIT_GB > 0:
+        used_bytes = _bytes_downloaded_today()
+        limit_bytes = DAILY_DOWNLOAD_LIMIT_GB * (1024 ** 3)
+        if used_bytes >= limit_bytes:
+            logger.info(
+                "scheduler: daily download budget reached (%.2f / %d GB) — "
+                "skipping import tick until 00:00 UTC",
+                used_bytes / (1024 ** 3), DAILY_DOWNLOAD_LIMIT_GB,
+            )
+            _state["last_import_count"] = 0
+            _state["last_import_errors"] = 0
+            _state["last_import_status"] = {"budget_exhausted": 1}
+            return
+
     db = SessionLocal()
     try:
         # Candidates: completed matches with no demo_id yet, on or after
@@ -449,9 +540,14 @@ async def _import_step() -> None:
         )
         if allowed_tiers:
             q = q.filter(ProMatch.tier.in_(allowed_tiers))
+        # Pull a generous pool so the tier-priority sort below has
+        # enough rows to actually CHOOSE from — order_by(played_at)
+        # alone with LIMIT N would let recent C-tier scrims push out
+        # yesterday's Major final because they're newer.
+        pool_size = max(MAX_IMPORTS_PER_TICK * 10, 50)
         candidates: list[ProMatch] = (
             q.order_by(ProMatch.played_at.desc().nullslast())
-            .limit(MAX_IMPORTS_PER_TICK * 3)
+            .limit(pool_size)
             .all()
         )
         # Filter to actually-completed matches (BO total >= 2). This
@@ -459,7 +555,27 @@ async def _import_step() -> None:
         candidates = [
             m for m in candidates
             if (m.score_a or 0) + (m.score_b or 0) >= 2
-        ][:MAX_IMPORTS_PER_TICK]
+        ]
+
+        # Tier-priority sort: S+ first, then S, A, B, C. Within a
+        # tier, newer matches win. This is the rule the user asked
+        # for — guarantees the budget gets spent on the most
+        # important matches available BEFORE any scrim from today
+        # squeezes them out.  Matches with NULL tier go last (only
+        # picked up if the allowed_tiers filter let them through,
+        # which by default it does not).
+        def _candidate_priority(m: ProMatch) -> tuple:
+            tier_p = _TIER_PRIORITY.get(m.tier, _TIER_PRIORITY[None])
+            # ``played_at`` may be None; treat None as the oldest
+            # possible date so it doesn't accidentally float to the
+            # top of an otherwise-tier-equal bucket.
+            played_ts = (
+                -m.played_at.timestamp() if m.played_at else 0
+            )
+            return (tier_p, played_ts)
+
+        candidates.sort(key=_candidate_priority)
+        candidates = candidates[:MAX_IMPORTS_PER_TICK]
 
         if not candidates:
             _state["last_import_count"] = 0
@@ -474,6 +590,28 @@ async def _import_step() -> None:
         for i, match in enumerate(candidates):
             if _shutdown is not None and _shutdown.is_set():
                 break
+            # Re-check the daily budget BEFORE each new download.
+            # A single Bo3 .rar can be 800 MB-1.5 GB, so even after we
+            # passed the initial gate at the start of the tick, one
+            # successful download mid-loop can push us over.  We stop
+            # as soon as the budget is gone — accepting that we might
+            # cross the line by a fraction of one demo, which is fine
+            # for a soft cap.
+            if DAILY_DOWNLOAD_LIMIT_GB > 0:
+                used_now = _bytes_downloaded_today()
+                limit_bytes = DAILY_DOWNLOAD_LIMIT_GB * (1024 ** 3)
+                if used_now >= limit_bytes:
+                    logger.info(
+                        "scheduler: hit daily budget mid-tick (%.2f / %d GB) "
+                        "— stopping after %d/%d candidates",
+                        used_now / (1024 ** 3), DAILY_DOWNLOAD_LIMIT_GB,
+                        i, len(candidates),
+                    )
+                    status_counts["budget_exhausted"] = (
+                        status_counts.get("budget_exhausted", 0)
+                        + (len(candidates) - i)
+                    )
+                    break
             # Skip rows that a manual /pro/matches/{id}/import is already
             # working on — same dedupe gate the HTTP handler uses, so the
             # auto tick and the click can't pile two downloads on the same

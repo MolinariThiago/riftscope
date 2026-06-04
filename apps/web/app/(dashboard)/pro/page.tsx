@@ -339,6 +339,38 @@ export default function ProMatchesPage() {
 
         {/* Background-scheduler indicator + diagnostic chips. */}
         <div className="relative mt-4 flex flex-wrap items-center gap-2">
+          {/* Daily download budget — green while we have headroom,
+              amber when ≥80% used, loss when exhausted. Shown
+              whenever the cap is enabled (limit_gb > 0). */}
+          {schedulerStatus?.daily_budget &&
+            schedulerStatus.daily_budget.limit_gb > 0 && (() => {
+              const b = schedulerStatus.daily_budget;
+              const pct = Math.min(100, (b.used_gb / b.limit_gb) * 100);
+              const tone = b.exhausted
+                ? "bg-loss/10 border-loss/30 text-loss"
+                : pct >= 80
+                  ? "bg-amber-500/10 border-amber-500/30 text-amber-500"
+                  : "bg-primary/10 border-primary/30 text-primary";
+              return (
+                <div
+                  className={cn(
+                    "inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md border",
+                    tone,
+                  )}
+                  title={
+                    b.exhausted
+                      ? "Budget agotado — el scheduler retoma a las 00:00 UTC"
+                      : `Descargas del día UTC actual. Reset 00:00 UTC.`
+                  }
+                >
+                  <span>
+                    {b.exhausted ? "Budget agotado" : "Budget"} ·{" "}
+                    <span className="text-foreground">{b.used_gb}</span>
+                    <span className="opacity-60"> / {b.limit_gb} GB</span>
+                  </span>
+                </div>
+              );
+            })()}
           {schedulerStatus?.running && (
             <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-primary/10 border border-primary/30 text-primary">
               <span className="relative flex h-2 w-2">
