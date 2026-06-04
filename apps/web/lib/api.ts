@@ -511,12 +511,28 @@ export const api = {
       request<{
         requeued: number;
         skipped: number;
+        /** Count of failed demos whose .dem bytes are missing from
+         *  storage (S3 HEAD returned 404 / local path doesn't exist).
+         *  These can't be retried — call ``purgeMissingDemos`` to
+         *  delete the rows so the scheduler re-imports from source. */
+        missingBytes: number;
         demoIds: number[];
+        missingBytesIds: number[];
         proOnly: boolean;
       }>(
         `/admin/demos/retry-failed?pro_only=${proOnly}&limit=${limit}`,
         { method: "POST" },
       ),
+    /** Delete failed demos whose bytes are gone AND clear the linked
+     *  ProMatch.demo_id so the scheduler can re-download from HLTV.
+     *  Only touches rows tagged by ``retryFailedDemos`` with the
+     *  "Bytes missing in storage" marker. */
+    purgeMissingDemos: () =>
+      request<{
+        deleted: number;
+        matchesCleared: number;
+        demoIds: number[];
+      }>(`/admin/demos/purge-missing`, { method: "POST" }),
     /** Admin queue for the bottom-right feedback widget. */
     feedback: {
       list: (status?: FeedbackStatus, limit = 200) =>

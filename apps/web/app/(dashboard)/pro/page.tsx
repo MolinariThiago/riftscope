@@ -95,6 +95,14 @@ export default function ProMatchesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
 
+  // Purge follow-up: when retry detects demos whose .dem bytes are
+  // missing from S3, this deletes those rows and frees the linked
+  // ProMatches so the scheduler can re-grab them from HLTV.
+  const purgeMissing = useMutation({
+    mutationFn: () => api.admin.purgeMissingDemos(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
+  });
+
   const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false);
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -403,31 +411,72 @@ export default function ProMatchesPage() {
               <span>Reset falló · ver logs</span>
             </div>
           )}
-          {/* Retry-failed result — green when at least one demo was
-              re-queued, muted when nothing matched. ``skipped`` flags
-              demos whose .dem file is missing on storage (those need a
-              full re-upload, retry alone won't help). */}
+          {/* Retry-failed result. Three states:
+              - Re-queued at least 1 → green chip with the count.
+              - Found missing-byte demos → amber chip with a
+                "Purgar y reimportar" button that fires the cleanup
+                endpoint (delete row + clear ProMatch.demo_id so the
+                scheduler re-downloads from HLTV).
+              - Nothing matched → muted chip. */}
           {retryFailed.data && (
+            <>
+              {retryFailed.data.requeued > 0 && (
+                <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-win/10 border border-win/30 text-win">
+                  <CheckCircle2 size={11} />
+                  <span>
+                    Reencoladas{" "}
+                    <span className="text-foreground">{retryFailed.data.requeued}</span>{" "}
+                    demos fallidas
+                  </span>
+                </div>
+              )}
+              {retryFailed.data.missingBytes > 0 && (
+                <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-500">
+                  <AlertCircle size={11} />
+                  <span>
+                    <span className="text-foreground">
+                      {retryFailed.data.missingBytes}
+                    </span>{" "}
+                    sin bytes en S3
+                  </span>
+                  <button
+                    onClick={() => purgeMissing.mutate()}
+                    disabled={purgeMissing.isPending}
+                    className="ml-1 px-1.5 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 disabled:opacity-50 transition-colors"
+                    title="Borra esas Demo rows y libera el ProMatch así el scheduler las vuelve a bajar de HLTV"
+                  >
+                    {purgeMissing.isPending ? "purgando…" : "purgar + reimportar"}
+                  </button>
+                </div>
+              )}
+              {retryFailed.data.requeued === 0 &&
+                retryFailed.data.missingBytes === 0 && (
+                  <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-surface-elevated border border-border text-muted-foreground">
+                    <CheckCircle2 size={11} />
+                    <span>Sin demos fallidas para reintentar</span>
+                  </div>
+                )}
+            </>
+          )}
+          {/* Purge follow-up result. */}
+          {purgeMissing.data && (
             <div
               className={cn(
                 "inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md",
-                retryFailed.data.requeued > 0
+                purgeMissing.data.deleted > 0
                   ? "bg-win/10 border border-win/30 text-win"
                   : "bg-surface-elevated border border-border text-muted-foreground",
               )}
             >
               <CheckCircle2 size={11} />
-              {retryFailed.data.requeued > 0 ? (
+              {purgeMissing.data.deleted > 0 ? (
                 <span>
-                  Reencoladas{" "}
-                  <span className="text-foreground">{retryFailed.data.requeued}</span>{" "}
-                  demos fallidas
-                  {retryFailed.data.skipped > 0 && (
-                    <> · {retryFailed.data.skipped} sin archivo (re-subir)</>
-                  )}
+                  Purgadas{" "}
+                  <span className="text-foreground">{purgeMissing.data.deleted}</span>{" "}
+                  · {purgeMissing.data.matchesCleared} matches listos para re-import
                 </span>
               ) : (
-                <span>Sin demos fallidas para reintentar</span>
+                <span>Nada para purgar</span>
               )}
             </div>
           )}

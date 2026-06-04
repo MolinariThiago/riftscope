@@ -354,6 +354,8 @@ async def admin_retry_failed_demos(
 
     storage = get_storage()
     bucket = getattr(storage, "bucket", None)
+    # ``head`` exists on the S3 backend; local storage uses path.exists().
+    head_fn = getattr(storage, "head", None)
 
     q = db.query(Demo).filter(Demo.status == "failed")
     if pro_only:
@@ -363,27 +365,48 @@ async def admin_retry_failed_demos(
     )
 
     requeued_ids: list[int] = []
+    missing_bytes_ids: list[int] = []
     skipped = 0
+    _missing_marker = "Bytes missing in storage — re-import from source."
 
     for demo in candidates:
-        # Defensive: the file has to be reachable. For S3 we trust the
-        # bucket; for local we verify the path exists so a known-dead
-        # demo doesn't get re-queued just to fail the same way.
         if not demo.storage_filename:
             skipped += 1
             continue
-        if bucket:
+
+        # Verify the bytes are actually there BEFORE re-queueing. For S3
+        # we HEAD the object (the worker would otherwise just 404 on
+        # download_file and end up failed again). For local storage we
+        # check the path. This is what gives the operator a useful chip
+        # ("X reencoladas · Y bytes faltan") instead of silently spending
+        # 50 queue slots on demos that can't possibly parse.
+        bytes_ok = True
+        if bucket and head_fn is not None:
+            try:
+                bytes_ok = head_fn(demo.storage_filename) is not None
+            except Exception:  # pragma: no cover — defensive
+                bytes_ok = False
+            abs_path = f"s3://{bucket}/{demo.storage_filename}"
+        elif bucket:
+            # S3 backend without ``head`` — fall back to "trust but
+            # verify later" (worker will 404 if missing). Best we can do
+            # if the storage class doesn't expose the check.
             abs_path = f"s3://{bucket}/{demo.storage_filename}"
         else:
             try:
                 local = storage.get_path(demo.storage_filename)
-                if not local.exists():
-                    skipped += 1
-                    continue
-                abs_path = str(local)
+                bytes_ok = local.exists()
+                abs_path = str(local) if bytes_ok else ""
             except Exception:  # pragma: no cover — defensive
-                skipped += 1
-                continue
+                bytes_ok = False
+                abs_path = ""
+
+        if not bytes_ok:
+            missing_bytes_ids.append(demo.id)
+            # Tag the row so the purge endpoint can find it without
+            # re-checking S3 (HEAD calls cost money on R2 / S3).
+            demo.error_message = _missing_marker
+            continue
 
         demo.status = "queued"
         demo.processing_progress = 0
@@ -400,8 +423,70 @@ async def admin_retry_failed_demos(
     return {
         "requeued": len(requeued_ids),
         "skipped": skipped,
+        "missingBytes": len(missing_bytes_ids),
         "demoIds": requeued_ids,
+        "missingBytesIds": missing_bytes_ids,
         "proOnly": pro_only,
+    }
+
+
+@router.post("/demos/purge-missing")
+def admin_purge_missing_demos(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Delete failed demos whose bytes are gone, freeing the ProMatch.
+
+    When ``/admin/demos/retry-failed`` finds demos with no bytes in
+    storage, it tags ``error_message`` with a known marker.  This
+    endpoint sweeps those up: deletes the Demo row AND clears
+    ``ProMatch.demo_id`` on the linked match so the scheduler can
+    re-download the demo from HLTV on its next tick.
+
+    Returns ``{deleted, matchesCleared, demoIds}``.
+    """
+    from db.models.pro_match import ProMatch
+
+    marker = "Bytes missing in storage"
+    candidates: list[Demo] = (
+        db.query(Demo)
+        .filter(Demo.status == "failed")
+        .filter(Demo.error_message.like(f"%{marker}%"))
+        .all()
+    )
+    if not candidates:
+        return {"deleted": 0, "matchesCleared": 0, "demoIds": []}
+
+    demo_ids = [d.id for d in candidates]
+    pro_match_ids = {d.pro_match_id for d in candidates if d.pro_match_id}
+
+    # Clear the FK on linked ProMatches BEFORE deleting the Demo rows,
+    # so the scheduler picks them up as importable again.  Don't touch
+    # matches whose demo_id points at a DIFFERENT (still-healthy)
+    # Demo — only clear the link if it's pointing at one of the rows
+    # we're about to delete.
+    matches_cleared = 0
+    if pro_match_ids:
+        matches = (
+            db.query(ProMatch)
+            .filter(ProMatch.id.in_(pro_match_ids))
+            .filter(ProMatch.demo_id.in_(demo_ids))
+            .all()
+        )
+        for m in matches:
+            m.demo_id = None
+            m.import_status = None
+            m.import_error = None
+            matches_cleared += 1
+
+    for demo in candidates:
+        db.delete(demo)
+
+    db.commit()
+    return {
+        "deleted": len(demo_ids),
+        "matchesCleared": matches_cleared,
+        "demoIds": demo_ids,
     }
 
 
