@@ -189,6 +189,11 @@ async def sync_pro_matches(
                 if m.demo_url and not existing.demo_url:
                     existing.demo_url = m.demo_url
                     changed = True
+                # Backfill tier on rows inserted before the source emitted
+                # one. Never overwrite a manual override.
+                if m.tier and not existing.tier:
+                    existing.tier = m.tier
+                    changed = True
                 if changed:
                     updated += 1
                 continue
@@ -205,6 +210,7 @@ async def sync_pro_matches(
                     event_name=m.event_name,
                     played_at=played_at_naive,
                     demo_url=m.demo_url,
+                    tier=m.tier,
                 )
             )
             inserted += 1

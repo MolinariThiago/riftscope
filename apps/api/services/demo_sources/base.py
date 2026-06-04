@@ -35,6 +35,12 @@ class ExternalMatch:
     event_name: str | None
     played_at: datetime | None
     demo_url: str | None
+    # Competitive tier inferred by the source (one of S+/S/A/B/C, or None).
+    # Sources that don't expose a tier signal leave this null and let the
+    # operator filter manually. The HLTV source maps the page's 0-5 star
+    # rating into this bucket so PRO_AUTO_TIERS gives meaningful results
+    # without an event-name whitelist.
+    tier: str | None = None
 
 
 class DemoSource(Protocol):

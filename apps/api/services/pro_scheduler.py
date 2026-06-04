@@ -280,6 +280,13 @@ async def _sync_step() -> None:
                     if m.demo_url and not existing.demo_url:
                         existing.demo_url = m.demo_url
                         changed = True
+                    # Backfill tier on rows that were inserted before the
+                    # source started emitting it (or by a different source).
+                    # Don't OVERWRITE an existing tier — operators may have
+                    # adjusted it manually via /admin.
+                    if m.tier and not existing.tier:
+                        existing.tier = m.tier
+                        changed = True
                     if changed:
                         updated += 1
                     continue
@@ -295,6 +302,7 @@ async def _sync_step() -> None:
                         event_name=m.event_name,
                         played_at=played_at_naive,
                         demo_url=m.demo_url,
+                        tier=m.tier,
                     )
                 )
                 inserted += 1

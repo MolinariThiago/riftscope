@@ -229,6 +229,20 @@ class HltvSource:
         r'class="[^"]*\bmap-text\b[^"]*"[^>]*>\s*([a-z0-9_]+)\s*<',
         re.IGNORECASE,
     )
+    # Match-importance stars (0-5). HLTV renders them with a span
+    # ``<span class="stars">`` containing one ``<i class="...star...">``
+    # per active star. cs2.cam / Skybox use the same signal under the
+    # hood to bucket matches into tier-1 / tier-2 / tier-3 — we mirror
+    # that here so the operator can filter HLTV's noise without having
+    # to maintain an event whitelist by hand.
+    _RE_STARS_BLOCK = re.compile(
+        r'<(?:span|div)[^>]*class="[^"]*\bstars\b[^"]*"[^>]*>(.*?)</(?:span|div)>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    _RE_STAR_ICON = re.compile(
+        r'<i[^>]*class="[^"]*\bstar\b[^"]*"',
+        re.IGNORECASE,
+    )
 
     # Hard ceiling on the per-match window. Within that cap, the actual
     # window for match N stops where match N+1's anchor starts so the
@@ -304,6 +318,15 @@ class HltvSource:
             map_match = self._RE_MAP.search(window)
             map_name = _clean(map_match.group(1)) if map_match else None
 
+            # Stars (0-5) → tier (S+/S/A/B/C). HLTV renders the importance
+            # rating inside <span class="stars"> with one <i class="star">
+            # per active star. Empty stars block = treat as 0.
+            stars_block = self._RE_STARS_BLOCK.search(window)
+            star_count = 0
+            if stars_block:
+                star_count = len(self._RE_STAR_ICON.findall(stars_block.group(1)))
+            tier = _stars_to_tier(star_count)
+
             played_at = date_for(start)
             seen_ids.add(hltv_id)
 
@@ -323,6 +346,7 @@ class HltvSource:
                 # proxy traffic and force us to choose between truncated
                 # sync runs and slow ones.
                 demo_url=None,
+                tier=tier,
             )
 
 
@@ -344,6 +368,37 @@ def _clean(s: str | None) -> str:
         .replace("&nbsp;", " ")
         .strip()
     )
+
+
+def _stars_to_tier(stars: int) -> str | None:
+    """Map HLTV's 0-5 importance stars into RIFTSCOPE's tier vocabulary.
+
+    HLTV's star rating is the closest thing they expose to a "match
+    importance" label — Majors and finals always get 5, second-tier
+    LANs get 3-4, regional online cups sit at 1-2, scrims and pickups
+    get 0. The Liquipedia-style ladder we already document in
+    ``ProMatch.tier`` (S+ / S / A / B / C) lines up pretty cleanly:
+
+        5 -> S+   (IEM Major, BLAST Premier finals)
+        4 -> S    (Tier-1 regular, ESL Pro League finals)
+        3 -> A    (Tier-1 regional, big qualifiers)
+        2 -> B    (Online cups, smaller LANs)
+        0-1 -> C  (Scrims, FPL-C, low-stakes qualifiers)
+
+    Returning None for anything outside 0-5 keeps the column NULL so
+    legacy filters that bypass tier still see the row.
+    """
+    if stars >= 5:
+        return "S+"
+    if stars == 4:
+        return "S"
+    if stars == 3:
+        return "A"
+    if stars == 2:
+        return "B"
+    if stars in (0, 1):
+        return "C"
+    return None
 
 
 def _parse_hltv_date(s: str) -> datetime | None:
