@@ -456,7 +456,9 @@ export default function ProMatchesPage() {
           label="Mapa"
           value={mapFilter}
           onChange={setMapFilter}
-          options={mapOptions}
+          // Options come in as canonical lowercase IDs ("mirage", "dust2")
+          // and the dropdown renders the display name ("Mirage", "Dust2").
+          options={mapOptions.map((m) => ({ value: m, label: prettyMapName(m) }))}
           placeholder="Todos los mapas"
         />
         <FilterDropdown
@@ -563,6 +565,13 @@ function Counter({
 // ============================================================
 // FilterDropdown — compact native <select> with our visual idiom
 // ============================================================
+// Accepts either a plain string[] (when the option's display label IS
+// the value, e.g. team names) OR {value, label}[] (for the map filter,
+// where ``value`` is the canonical "mirage" id but the label shown to
+// the user is "Mirage"). Keeping it polymorphic avoids forcing every
+// caller into the verbose object form.
+type DropdownOption = string | { value: string; label: string };
+
 function FilterDropdown({
   label,
   value,
@@ -573,7 +582,7 @@ function FilterDropdown({
   label: string;
   value: string;
   onChange: (v: string) => void;
-  options: string[];
+  options: DropdownOption[];
   placeholder: string;
 }) {
   const active = value !== "";
@@ -596,11 +605,15 @@ function FilterDropdown({
         className="appearance-none bg-transparent outline-none cursor-pointer pr-3 max-w-[180px] truncate"
       >
         <option value="">{placeholder}</option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
+        {options.map((opt) => {
+          const v = typeof opt === "string" ? opt : opt.value;
+          const l = typeof opt === "string" ? opt : opt.label;
+          return (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          );
+        })}
       </select>
       <ChevronDown
         size={11}
@@ -771,19 +784,29 @@ function MatchMapSubRow({
         "bg-surface-elevated/40 hover:bg-surface-elevated/70 transition-colors",
       )}
     >
-      {/* Map thumbnail surrogate — 2-letter pill with the map's name */}
+      {/* Map thumbnail surrogate — 2-letter pill with the map's name.
+          Both the avatar and the display label use the normalised /
+          pretty form so ``de_mirage`` and ``Mirage`` look the same in
+          the UI. */}
       <div className="flex items-center gap-2 w-32 flex-shrink-0">
-        <div className="w-9 h-9 rounded-md bg-surface flex items-center justify-center text-[10px] font-mono-rs uppercase tracking-wider text-primary border border-border">
-          {(demoMap.map ?? "??").slice(0, 2)}
-        </div>
-        <div className="min-w-0">
-          <div className="text-[10px] font-mono-rs text-muted-foreground/70 uppercase tracking-wider">
-            Mapa {index + 1}
-          </div>
-          <div className="text-xs font-semibold capitalize truncate">
-            {demoMap.map ?? "—"}
-          </div>
-        </div>
+        {(() => {
+          const norm = normalizeMapName(demoMap.map);
+          const pretty = norm ? prettyMapName(norm) : "—";
+          const avatar = norm ? norm.slice(0, 2).toUpperCase() : "??";
+          return (
+            <>
+              <div className="w-9 h-9 rounded-md bg-surface flex items-center justify-center text-[10px] font-mono-rs uppercase tracking-wider text-primary border border-border">
+                {avatar}
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] font-mono-rs text-muted-foreground/70 uppercase tracking-wider">
+                  Mapa {index + 1}
+                </div>
+                <div className="text-xs font-semibold truncate">{pretty}</div>
+              </div>
+            </>
+          );
+        })()}
       </div>
 
       {/* Per-map score with team names — read-only context */}
@@ -1258,11 +1281,14 @@ function matchesSearch(m: ProMatch, q: string): boolean {
 
 function matchesMap(m: ProMatch, map: string): boolean {
   if (!map) return true;
+  const target = normalizeMapName(map);
+  if (!target) return true;
   // A match satisfies the map filter when EITHER its primary map_name
   // equals it (for non-Bo3 rows that only have one map), OR any map in
-  // its series does.
-  if (m.map === map) return true;
-  return (m.maps ?? []).some((x) => x.map === map);
+  // its series does. Normalize both sides so ``de_mirage`` matches
+  // ``mirage`` matches ``Mirage``.
+  if (normalizeMapName(m.map) === target) return true;
+  return (m.maps ?? []).some((x) => normalizeMapName(x.map) === target);
 }
 
 function matchesTeam(m: ProMatch, team: string): boolean {
@@ -1275,13 +1301,59 @@ function matchesEvent(m: ProMatch, ev: string): boolean {
   return (m.event ?? "") === ev;
 }
 
+// Active map pool (CS2). The order here is the order the dropdown shows
+// them in — most-played first, then the rest alphabetical-ish. Anything
+// else that comes from the backend (``bo3``, ``tba``, ``de_train_old``,
+// the operator typoing a map name into a manual upload, ...) is dropped
+// from the dropdown entirely so the filter list stays clean.
+const KNOWN_MAPS = [
+  "mirage",
+  "dust2",
+  "inferno",
+  "ancient",
+  "nuke",
+  "overpass",
+  "train",
+  "vertigo",
+  "anubis",
+  "cache",
+] as const;
+const KNOWN_MAP_SET = new Set<string>(KNOWN_MAPS);
+
+function normalizeMapName(raw: string | null | undefined): string {
+  if (!raw) return "";
+  // ``de_mirage`` → ``mirage`` (Valve's bsp prefix slips into demo metadata).
+  // ``Mirage``    → ``mirage`` (display casing).
+  // Trims whitespace defensively.
+  return raw.trim().toLowerCase().replace(/^de_/, "");
+}
+
+function prettyMapName(raw: string): string {
+  // The dropdown displays e.g. "Mirage" / "Dust2" — capitalised
+  // canonical form. Special-case dust2 because "Dust2" is the
+  // conventional rendering, not "Dust 2".
+  if (raw === "dust2") return "Dust2";
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
 function collectMaps(matches: ProMatch[]): string[] {
-  const set = new Set<string>();
+  // We could just return KNOWN_MAPS unconditionally — but then the
+  // dropdown would offer maps that none of the user's matches use,
+  // which clutters the UI when /pro only has a few matches. So filter
+  // by "actually present" while still enforcing the pool whitelist.
+  const present = new Set<string>();
   for (const m of matches) {
-    if (m.map) set.add(m.map);
-    for (const map of m.maps ?? []) if (map.map) set.add(map.map);
+    const a = normalizeMapName(m.map);
+    if (KNOWN_MAP_SET.has(a)) present.add(a);
+    for (const x of m.maps ?? []) {
+      const n = normalizeMapName(x.map);
+      if (KNOWN_MAP_SET.has(n)) present.add(n);
+    }
   }
-  return Array.from(set).sort();
+  // Return in KNOWN_MAPS order — Mirage / Dust2 / Inferno first, not
+  // alphabetical, because that matches how CS2 players think of the
+  // pool and matches the order in the spec the user wrote.
+  return KNOWN_MAPS.filter((m) => present.has(m));
 }
 
 function collectTeams(matches: ProMatch[]): string[] {
