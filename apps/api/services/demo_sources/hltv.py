@@ -100,8 +100,19 @@ class HltvSource:
                 sample,
             )
         if since:
+            # The scheduler passes ``since`` as tz-aware UTC (from
+            # ``get_pro_cutoff``), but HLTV day headers parse to NAIVE
+            # datetimes (they only carry a date, no timezone). Comparing
+            # the two directly raises TypeError. Strip the tz from both
+            # ends so we compare on a single representation, then filter.
+            since_naive = (
+                since.astimezone(timezone.utc).replace(tzinfo=None)
+                if since.tzinfo is not None
+                else since
+            )
             matches = [
-                m for m in matches if m.played_at is None or m.played_at >= since
+                m for m in matches
+                if m.played_at is None or m.played_at >= since_naive
             ]
         logger.info(
             "HLTV /results: %d matches after parse + since filter (since=%s)",
