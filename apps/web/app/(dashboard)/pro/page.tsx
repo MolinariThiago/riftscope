@@ -42,6 +42,12 @@ export default function ProMatchesPage() {
   const qc = useQueryClient();
   const [dateFilter, setDateFilter] = useState<DateFilter>("week");
   const [search, setSearch] = useState("");
+  // Map / team / event filters — set to "" to mean "All". The dropdowns
+  // are populated from the matches actually present in the feed so the
+  // operator can only pick something that's going to give results.
+  const [mapFilter, setMapFilter] = useState("");
+  const [teamFilter, setTeamFilter] = useState("");
+  const [eventFilter, setEventFilter] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["pro-matches"],
@@ -90,13 +96,16 @@ export default function ProMatchesPage() {
     [allMatches],
   );
 
-  // Apply user filters (date window + free-text search) and sort:
+  // Apply user filters (date window + free-text search + map/team/event
+  // dropdowns) and sort:
   //   1. Imported + parsed first (have a demoId, ready to watch).
   //   2. Then by played_at desc — newer matches first.
   const visible = useMemo(() => {
-    const filtered = filterByDate(pastMatches, dateFilter).filter((m) =>
-      matchesSearch(m, search),
-    );
+    const filtered = filterByDate(pastMatches, dateFilter)
+      .filter((m) => matchesSearch(m, search))
+      .filter((m) => matchesMap(m, mapFilter))
+      .filter((m) => matchesTeam(m, teamFilter))
+      .filter((m) => matchesEvent(m, eventFilter));
     return [...filtered].sort((a, b) => {
       // Watchable rises to the top.
       const aWatchable = a.demoId != null ? 1 : 0;
@@ -107,7 +116,16 @@ export default function ProMatchesPage() {
       const tb = b.playedAt ? new Date(b.playedAt).getTime() : 0;
       return tb - ta;
     });
-  }, [pastMatches, dateFilter, search]);
+  }, [pastMatches, dateFilter, search, mapFilter, teamFilter, eventFilter]);
+
+  // Distinct options for the dropdowns — derived from the matches the
+  // user could actually pick. Sorted alphabetically. Counts (not used in
+  // the UI today) could be added by upgrading these to {label, count}.
+  const mapOptions = useMemo(() => collectMaps(pastMatches), [pastMatches]);
+  const teamOptions = useMemo(() => collectTeams(pastMatches), [pastMatches]);
+  const eventOptions = useMemo(() => collectEvents(pastMatches), [pastMatches]);
+
+  const hasActiveFilters = !!(mapFilter || teamFilter || eventFilter || search);
 
   const watchableCount = pastMatches.filter((m) => m.demoId != null).length;
   // "Importable" = match is over (has a score) and we haven't pulled the
@@ -121,9 +139,34 @@ export default function ProMatchesPage() {
   // "results page" structure — each day is a separate stripe.
   const groupedByDate = useMemo(() => groupByDate(visible), [visible]);
 
+  // Public/Reader header — everyone (logged-in users) sees this minimal
+  // banner so /pro stays scannable. The big "Partidas pro" block with
+  // upload / sync controls, KPI counters and scheduler diagnostics moved
+  // BELOW this and is gated to admins only — those tools aren't for
+  // regular users and were dominating the view.
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
-      {/* HERO */}
+      {!isAdmin && (
+        <header className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-primary-dim flex items-center justify-center flex-shrink-0 ring-1 ring-primary/20">
+            <Trophy size={18} className="text-primary" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-display font-black tracking-tight">
+              {t("pro.title")}
+            </h1>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Partidas pro terminadas, listas para ver en 2D.
+            </p>
+          </div>
+        </header>
+      )}
+
+      {/* HERO — admin only. Holds the upload button, proxy / sync
+          controls, KPI counters and the scheduler diagnostics chip row.
+          None of that is useful to a regular user, and showing it made
+          the page look like an admin panel. */}
+      {isAdmin && (
       <header className="glass-card rounded-2xl p-6 sm:p-8 relative overflow-hidden">
         <div
           aria-hidden
@@ -354,8 +397,9 @@ export default function ProMatchesPage() {
           )}
         </div>
       </header>
+      )}
 
-      {/* FILTER BAR */}
+      {/* FILTER BAR — row 1: date window pills + search */}
       <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
         <div className="flex gap-1.5 p-1 bg-surface rounded-xl border border-border w-fit overflow-x-auto">
           {DATE_FILTERS.map((f) => {
@@ -400,6 +444,48 @@ export default function ProMatchesPage() {
             className="w-full bg-surface border border-border rounded-lg pl-9 pr-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
           />
         </div>
+      </div>
+
+      {/* FILTER BAR — row 2: map / team / tournament dropdowns. Options
+          are derived from the matches in the feed so the operator can
+          only pick something that actually has results. Empty string =
+          "all"; the clear-all button only appears when at least one of
+          these (or the search) is active so the UI stays quiet. */}
+      <div className="flex flex-wrap items-center gap-2 -mt-2">
+        <FilterDropdown
+          label="Mapa"
+          value={mapFilter}
+          onChange={setMapFilter}
+          options={mapOptions}
+          placeholder="Todos los mapas"
+        />
+        <FilterDropdown
+          label="Equipo"
+          value={teamFilter}
+          onChange={setTeamFilter}
+          options={teamOptions}
+          placeholder="Todos los equipos"
+        />
+        <FilterDropdown
+          label="Torneo"
+          value={eventFilter}
+          onChange={setEventFilter}
+          options={eventOptions}
+          placeholder="Todos los torneos"
+        />
+        {hasActiveFilters && (
+          <button
+            onClick={() => {
+              setMapFilter("");
+              setTeamFilter("");
+              setEventFilter("");
+              setSearch("");
+            }}
+            className="text-[11px] font-mono-rs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md hover:bg-surface-elevated transition-colors"
+          >
+            Limpiar filtros
+          </button>
+        )}
       </div>
 
       {/* CONTENT */}
@@ -475,6 +561,56 @@ function Counter({
 }
 
 // ============================================================
+// FilterDropdown — compact native <select> with our visual idiom
+// ============================================================
+function FilterDropdown({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder: string;
+}) {
+  const active = value !== "";
+  return (
+    <label
+      className={cn(
+        "relative flex items-center gap-1.5 rounded-lg border text-xs transition-colors",
+        "px-2.5 py-1.5 pr-7",
+        active
+          ? "bg-primary/10 border-primary/40 text-primary"
+          : "bg-surface border-border text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <span className="font-mono-rs text-[10px] uppercase tracking-wider opacity-70">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="appearance-none bg-transparent outline-none cursor-pointer pr-3 max-w-[180px] truncate"
+      >
+        <option value="">{placeholder}</option>
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={11}
+        className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-60"
+      />
+    </label>
+  );
+}
+
+// ============================================================
 // Date group + match row
 // ============================================================
 
@@ -516,49 +652,212 @@ function MatchRow({ match }: { match: ProMatch }) {
     match.scoreB > match.scoreA;
   const watchable = match.demoId != null;
 
+  // Bo3 / Bo5 — when more than one map is linked, the row expands into a
+  // card showing the series header and a sub-row per map (cs2.cam style).
+  // The series header retains the time / event / teams / score; each
+  // map gets its own thumbnail, individual score and "Ver en 2D" button.
+  const maps = match.maps ?? [];
+  const isSeries = maps.length > 1;
+
   return (
     <div
       className={cn(
-        "px-4 py-3 flex items-center gap-4 transition-colors",
+        "transition-colors",
         "hover:bg-surface-elevated/30",
         watchable && "bg-primary/[0.03]",
+        isSeries && "border-b border-border/40 last:border-b-0",
       )}
     >
-      {/* Time + event — compact left column */}
-      <div className="hidden sm:flex flex-col gap-0.5 w-32 flex-shrink-0">
-        <div className="text-[11px] font-mono-rs text-muted-foreground">
-          {formatTime(match.playedAt)}
+      {/* SERIES HEADER (same layout as the original single-row view) */}
+      <div className="px-4 py-3 flex items-center gap-4">
+        {/* Time + event — compact left column */}
+        <div className="hidden sm:flex flex-col gap-0.5 w-32 flex-shrink-0">
+          <div className="text-[11px] font-mono-rs text-muted-foreground">
+            {formatTime(match.playedAt)}
+          </div>
+          <div
+            className="text-[11px] text-muted-foreground/80 truncate"
+            title={match.event ?? undefined}
+          >
+            {match.event ?? "—"}
+          </div>
+        </div>
+
+        {/* Teams + score — the centerpiece */}
+        <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+          <TeamCell name={match.teamA} winner={aWon} losing={bWon} side="left" />
+          <div className="flex items-center gap-1.5 font-mono-rs text-lg font-bold px-2">
+            <span className={cn(aWon ? "text-primary" : "text-muted-foreground")}>
+              {match.scoreA ?? 0}
+            </span>
+            <span className="text-muted-foreground/40 text-sm">:</span>
+            <span className={cn(bWon ? "text-primary" : "text-muted-foreground")}>
+              {match.scoreB ?? 0}
+            </span>
+          </div>
+          <TeamCell name={match.teamB} winner={bWon} losing={aWon} side="right" />
+        </div>
+
+        {/* Actions — right-aligned. For a Bo3 we collapse to a small
+            "BO3 · N mapas" pill since each map gets its own CTA below;
+            for a Bo1 the original action column is rendered as before. */}
+        <div className="flex-shrink-0">
+          {isSeries ? (
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface-elevated border border-border/50 text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground">
+              <span className="text-primary font-bold">BO{maps.length}</span>
+              <span>· {maps.length} mapas</span>
+            </div>
+          ) : (
+            <MatchActions match={match} />
+          )}
+        </div>
+      </div>
+
+      {/* PER-MAP SUB-ROWS — only on Bo3/Bo5. Each map: thumbnail, score,
+          map name + which team picked it, and a primary "Ver en 2D"
+          button. Mirrors the cs2.cam Public Demos layout the user asked
+          for. */}
+      {isSeries && (
+        <div className="px-4 pb-3 space-y-1.5">
+          {maps.map((m, idx) => (
+            <MatchMapSubRow
+              key={m.demoId}
+              index={idx}
+              demoMap={m}
+              teamA={match.teamA}
+              teamB={match.teamB}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One row per map inside a Bo3/Bo5 card. Inspired by cs2.cam's
+// "Public Demos" layout: small visual indicator on the left (map
+// initials in lieu of a thumbnail asset), per-map score, status, and a
+// direct "Ver en 2D" CTA so the user doesn't need to expand anything.
+function MatchMapSubRow({
+  index,
+  demoMap,
+  teamA,
+  teamB,
+}: {
+  index: number;
+  demoMap: NonNullable<ProMatch["maps"]>[number];
+  teamA: string;
+  teamB: string;
+}) {
+  const aWon =
+    demoMap.scoreA != null &&
+    demoMap.scoreB != null &&
+    demoMap.scoreA > demoMap.scoreB;
+  const bWon =
+    demoMap.scoreA != null &&
+    demoMap.scoreB != null &&
+    demoMap.scoreB > demoMap.scoreA;
+  const isParsing =
+    demoMap.status === "uploaded" ||
+    demoMap.status === "queued" ||
+    demoMap.status === "processing";
+  const isFailed = demoMap.status === "failed";
+  const isReady = demoMap.status === "completed";
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 border border-border/40",
+        "bg-surface-elevated/40 hover:bg-surface-elevated/70 transition-colors",
+      )}
+    >
+      {/* Map thumbnail surrogate — 2-letter pill with the map's name */}
+      <div className="flex items-center gap-2 w-32 flex-shrink-0">
+        <div className="w-9 h-9 rounded-md bg-surface flex items-center justify-center text-[10px] font-mono-rs uppercase tracking-wider text-primary border border-border">
+          {(demoMap.map ?? "??").slice(0, 2)}
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] font-mono-rs text-muted-foreground/70 uppercase tracking-wider">
+            Mapa {index + 1}
+          </div>
+          <div className="text-xs font-semibold capitalize truncate">
+            {demoMap.map ?? "—"}
+          </div>
+        </div>
+      </div>
+
+      {/* Per-map score with team names — read-only context */}
+      <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-xs">
+        <div
+          className={cn(
+            "truncate text-right",
+            aWon ? "text-primary font-bold" : "text-muted-foreground",
+          )}
+          title={teamA}
+        >
+          {teamA}
+        </div>
+        <div className="font-mono-rs font-bold px-1.5">
+          <span className={cn(aWon ? "text-primary" : "text-muted-foreground")}>
+            {demoMap.scoreA ?? "—"}
+          </span>
+          <span className="text-muted-foreground/40 mx-0.5">:</span>
+          <span className={cn(bWon ? "text-primary" : "text-muted-foreground")}>
+            {demoMap.scoreB ?? "—"}
+          </span>
         </div>
         <div
-          className="text-[11px] text-muted-foreground/80 truncate"
-          title={match.event ?? undefined}
+          className={cn(
+            "truncate",
+            bWon ? "text-primary font-bold" : "text-muted-foreground",
+          )}
+          title={teamB}
         >
-          {match.event ?? "—"}
+          {teamB}
         </div>
       </div>
 
-      {/* Teams + score — the centerpiece */}
-      <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-        <TeamCell name={match.teamA} winner={aWon} losing={bWon} side="left" />
-        <div className="flex items-center gap-1.5 font-mono-rs text-lg font-bold px-2">
-          <span className={cn(aWon ? "text-primary" : "text-muted-foreground")}>
-            {match.scoreA ?? 0}
+      {/* Per-map action — same vocabulary as the Bo1 button strip but
+          slightly tighter to fit the sub-row density. */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {isReady && (
+          <>
+            <Link
+              href={`/demo/${demoMap.demoId}/replay`}
+              className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <PlayCircle size={11} />
+              Ver en 2D
+            </Link>
+            <Link
+              href={`/demo/${demoMap.demoId}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-border-strong transition-colors"
+              title="Estadísticas"
+            >
+              <BarChart3 size={11} />
+            </Link>
+          </>
+        )}
+        {isParsing && (
+          <span className="text-[11px] font-mono-rs text-accent inline-flex items-center gap-1 px-2 py-1">
+            <Loader2 size={11} className="animate-spin" />
+            {demoMap.processingProgress}%
           </span>
-          <span className="text-muted-foreground/40 text-sm">:</span>
-          <span className={cn(bWon ? "text-primary" : "text-muted-foreground")}>
-            {match.scoreB ?? 0}
+        )}
+        {isFailed && (
+          <span
+            className="text-[11px] font-mono-rs text-loss inline-flex items-center gap-1 px-2 py-1"
+            title={demoMap.errorMessage ?? undefined}
+          >
+            <AlertCircle size={11} />
+            Falló
           </span>
-        </div>
-        <TeamCell name={match.teamB} winner={bWon} losing={aWon} side="right" />
-      </div>
-
-      {/* Actions — right-aligned */}
-      <div className="flex-shrink-0">
-        <MatchActions match={match} />
+        )}
       </div>
     </div>
   );
 }
+
 
 function TeamCell({
   name,
@@ -615,78 +914,39 @@ function MatchActions({ match }: { match: ProMatch }) {
     mutationFn: () => api.pro.import(match.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
-  const [expanded, setExpanded] = useState(false);
 
-  // STATE: at least one map has been imported. ``maps`` contains every
-  // Demo linked to this ProMatch — for a Bo1 there's one entry, for a
-  // Bo3 there are 2-3 entries (one per map played).
+  // Bo3/Bo5 are rendered by MatchRow as per-map sub-rows now, so this
+  // function only gets called for Bo1 (or rows that have exactly one
+  // imported map). Render the original single-button strip.
   const maps = match.maps ?? [];
   if (maps.length > 0) {
-    const seriesIsBo = maps.length > 1;
     const primary = maps[0];
     return (
-      <div className="flex flex-col items-end gap-1.5">
-        <div className="flex items-center gap-1.5">
-          {/* Primary CTA — first map, big button. For a Bo1 this is the
-              only thing the user needs. For a series it's the "default"
-              jump; clicking the expander reveals the rest. */}
-          <Link
-            href={`/demo/${primary.demoId}/replay`}
-            className={cn(
-              "inline-flex items-center gap-1.5 text-xs font-semibold",
-              "px-3 py-1.5 rounded-md bg-primary text-primary-foreground",
-              "hover:bg-primary/90 transition-colors shadow-sm",
-            )}
-            title={primary.map ? `Mapa 1: ${primary.map}` : "Ver demo"}
-          >
-            <PlayCircle size={13} />
-            {seriesIsBo ? `Mapa 1${primary.map ? ` · ${primary.map}` : ""}` : "Ver en 2D"}
-            <ArrowRight size={11} />
-          </Link>
-          {!seriesIsBo && (
-            <Link
-              href={`/demo/${primary.demoId}`}
-              className={cn(
-                "inline-flex items-center gap-1 text-xs",
-                "px-2.5 py-1.5 rounded-md border border-border text-muted-foreground",
-                "hover:text-foreground hover:border-border-strong transition-colors",
-              )}
-              title="Estadísticas del partido"
-            >
-              <BarChart3 size={12} />
-              Stats
-            </Link>
+      <div className="flex items-center gap-1.5">
+        <Link
+          href={`/demo/${primary.demoId}/replay`}
+          className={cn(
+            "inline-flex items-center gap-1.5 text-xs font-semibold",
+            "px-3 py-1.5 rounded-md bg-primary text-primary-foreground",
+            "hover:bg-primary/90 transition-colors shadow-sm",
           )}
-          {seriesIsBo && (
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className={cn(
-                "inline-flex items-center gap-1 text-[11px] font-semibold",
-                "px-2.5 py-1.5 rounded-md border transition-colors",
-                expanded
-                  ? "bg-surface-elevated text-foreground border-border"
-                  : "border-border text-muted-foreground hover:text-foreground hover:border-border-strong",
-              )}
-              title={`${maps.length} mapas en este partido`}
-            >
-              <ChevronDown
-                size={12}
-                className={cn(
-                  "transition-transform",
-                  expanded && "rotate-180",
-                )}
-              />
-              {maps.length} mapas
-            </button>
+        >
+          <PlayCircle size={13} />
+          Ver en 2D
+          <ArrowRight size={11} />
+        </Link>
+        <Link
+          href={`/demo/${primary.demoId}`}
+          className={cn(
+            "inline-flex items-center gap-1 text-xs",
+            "px-2.5 py-1.5 rounded-md border border-border text-muted-foreground",
+            "hover:text-foreground hover:border-border-strong transition-colors",
           )}
-        </div>
-        {seriesIsBo && expanded && (
-          <div className="flex flex-col items-end gap-1 mt-1 w-full max-w-xs">
-            {maps.map((m, idx) => (
-              <SeriesMapRow key={m.demoId} index={idx} demoMap={m} />
-            ))}
-          </div>
-        )}
+          title="Estadísticas del partido"
+        >
+          <BarChart3 size={12} />
+          Stats
+        </Link>
       </div>
     );
   }
@@ -994,6 +1254,49 @@ function matchesSearch(m: ProMatch, q: string): boolean {
     m.teamB.toLowerCase().includes(needle) ||
     (m.event ?? "").toLowerCase().includes(needle)
   );
+}
+
+function matchesMap(m: ProMatch, map: string): boolean {
+  if (!map) return true;
+  // A match satisfies the map filter when EITHER its primary map_name
+  // equals it (for non-Bo3 rows that only have one map), OR any map in
+  // its series does.
+  if (m.map === map) return true;
+  return (m.maps ?? []).some((x) => x.map === map);
+}
+
+function matchesTeam(m: ProMatch, team: string): boolean {
+  if (!team) return true;
+  return m.teamA === team || m.teamB === team;
+}
+
+function matchesEvent(m: ProMatch, ev: string): boolean {
+  if (!ev) return true;
+  return (m.event ?? "") === ev;
+}
+
+function collectMaps(matches: ProMatch[]): string[] {
+  const set = new Set<string>();
+  for (const m of matches) {
+    if (m.map) set.add(m.map);
+    for (const map of m.maps ?? []) if (map.map) set.add(map.map);
+  }
+  return Array.from(set).sort();
+}
+
+function collectTeams(matches: ProMatch[]): string[] {
+  const set = new Set<string>();
+  for (const m of matches) {
+    if (m.teamA) set.add(m.teamA);
+    if (m.teamB) set.add(m.teamB);
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+function collectEvents(matches: ProMatch[]): string[] {
+  const set = new Set<string>();
+  for (const m of matches) if (m.event) set.add(m.event);
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
 function groupByDate(
