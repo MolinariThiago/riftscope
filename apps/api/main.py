@@ -39,6 +39,7 @@ from routers import (
     playbook,
     playbook_folders,
     pro,
+    stats,
     team,
 )
 
@@ -310,6 +311,7 @@ app.include_router(players.router, prefix="/players", tags=["players"])
 app.include_router(
     leaderboards.router, prefix="/leaderboards", tags=["leaderboards"]
 )
+app.include_router(stats.router, prefix="/stats", tags=["stats"])
 app.include_router(maps.router, prefix="/maps", tags=["maps"])
 app.include_router(playbook.router, prefix="/playbooks", tags=["playbooks"])
 app.include_router(

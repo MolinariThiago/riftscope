@@ -196,6 +196,18 @@ export const api = {
       request<void>(`/teams/${id}`, { method: "DELETE" }),
   },
 
+  stats: {
+    /** Public counts used as trust signals on the landing page.
+     *  Anonymous-safe, cheap, served from /stats/public. */
+    publicStats: () =>
+      request<{
+        demosAnalysed: number;
+        proMatches: number;
+        playersRanked: number;
+        roundsAnalysed: number;
+      }>("/stats/public"),
+  },
+
   leaderboards: {
     /** Fetch the HLTV-2.0-rated player leaderboard. All filters are
      *  optional — calling with no args returns the top 30 across every

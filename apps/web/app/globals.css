@@ -358,3 +358,84 @@
   }
   .link-underline:hover::after { transform: scaleX(1); }
 }
+
+
+/* ===========================================================
+ * Landing — radar / scanline / glow utilities
+ * Used by the cinematic Hero. Self-contained so the file
+ * stays readable; tokens reference existing CSS vars.
+ * =========================================================== */
+
+@layer utilities {
+  /* Slow radial sweep — single line + faint cone, anchored
+     at center via transform-origin in the SVG markup. */
+  @keyframes radar-sweep {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  .animate-radar-sweep {
+    animation: radar-sweep 6s linear infinite;
+    transform-origin: 300px 200px;
+  }
+
+  /* Player dot pulse — staggered via animation-delay inline */
+  @keyframes dot-pulse {
+    0%, 100% { opacity: 0.85; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.35); }
+  }
+  .animate-dot-pulse {
+    animation: dot-pulse 2.4s ease-in-out infinite;
+    transform-origin: center;
+    transform-box: fill-box;
+  }
+
+  /* Subtle vertical scanline — slow drift */
+  @keyframes scanline-drift {
+    from { transform: translateY(-100%); }
+    to   { transform: translateY(100%); }
+  }
+  .animate-scanline {
+    animation: scanline-drift 12s linear infinite;
+  }
+
+  /* Floating glow orbs (faint cyan / purple blobs in the BG) */
+  @keyframes orb-drift {
+    0%   { transform: translate(0, 0); }
+    50%  { transform: translate(40px, -30px); }
+    100% { transform: translate(0, 0); }
+  }
+  .animate-orb-drift {
+    animation: orb-drift 14s ease-in-out infinite;
+  }
+
+  /* Counter strip — number rolls in once on mount */
+  @keyframes count-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .animate-count-in { animation: count-in 0.5s ease-out both; }
+
+  /* Card glow on hover — soft cyan halo from the inside */
+  .card-glow {
+    position: relative;
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+  .card-glow:hover {
+    border-color: hsl(var(--primary) / 0.45);
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.10),
+      0 6px 30px -10px hsl(var(--primary) / 0.30);
+  }
+
+  /* Brick of static noise — used as the scanline texture overlay */
+  .bg-scanlines {
+    background-image: repeating-linear-gradient(
+      0deg,
+      hsl(var(--primary) / 0.03) 0px,
+      hsl(var(--primary) / 0.03) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  }
+}
+

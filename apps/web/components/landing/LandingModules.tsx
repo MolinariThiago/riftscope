@@ -94,7 +94,7 @@ function ModuleCard({
   return (
     <motion.div
       variants={fadeUp}
-      className="glass-card rounded-xl p-5 hover:border-primary/30 transition-colors"
+      className="glass-card card-glow rounded-xl p-5"
     >
       <div className={cn("inline-flex p-2 rounded-lg mb-3", toneClass[tone])}>
         <Icon size={16} />
@@ -134,7 +134,7 @@ export function LandingWhatsNew() {
   ];
   return (
     <SectionShell
-      tag="R02 — WHAT'S NEW"
+      tag="R02 · WHAT'S NEW"
       title={
         <>
           Recent <span className="gradient-text">additions.</span>
@@ -180,7 +180,7 @@ export function LandingWhatsNew() {
 export function LandingProMatches() {
   return (
     <SectionShell
-      tag="R04 — PRO MATCHES"
+      tag="R04 · PRO MATCHES"
       title={
         <>
           Every pro match, <span className="gradient-text">ready to watch.</span>
@@ -236,7 +236,7 @@ export function LandingProMatches() {
 export function LandingLeaderboards() {
   return (
     <SectionShell
-      tag="R05 — LEADERBOARDS"
+      tag="R05 · LEADERBOARDS"
       title={
         <>
           Top players, <span className="gradient-text">ranked honestly.</span>
@@ -280,7 +280,7 @@ export function LandingLeaderboards() {
 export function LandingTactical() {
   return (
     <SectionShell
-      tag="R06 — TACTICAL BOARD"
+      tag="R06 · TACTICAL BOARD"
       title={
         <>
           Draw it, <span className="gradient-text">save it, run it.</span>
@@ -367,7 +367,7 @@ const FAQ: { q: string; a: string }[] = [
 export function LandingFAQ() {
   return (
     <SectionShell
-      tag="R09 — FAQ"
+      tag="R09 · FAQ"
       title={
         <>
           Common <span className="gradient-text">questions.</span>
