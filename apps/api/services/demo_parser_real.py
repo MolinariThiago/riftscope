@@ -254,13 +254,13 @@ class RealDemoParser:
 
         # ---- Damage events (for real ADR + utility damage) ------------------
         # ``player_hurt`` fires for every damage tick (bullets, grenades,
-        # knife, etc.). Sum ``dmg_health`` per attacker for true ADR
-        # instead of the formula estimate the old build used. Filter
-        # self-damage and team-damage (attacker_team_num == victim_team_num).
-        # Utility damage is the subset where the weapon is a grenade
-        # (he / molotov / incendiary / inferno).
+        # knife, etc.). On a 30-minute Bo3 game this can be 200k-500k
+        # rows. We DO NOT materialise it as a Python list-of-dicts here
+        # — that copy is enough to OOM-kill the worker on Railway Hobby
+        # (512 MB) and leave the demo stuck in ``processing``
+        # forever. The aggregator iterates the DataFrame directly with
+        # vectorised pandas ops (C-level, ~constant peak memory).
         hurt_df = _safe_event(parser, "player_hurt")
-        hurt_raw = hurt_df.to_dict(orient="records") if hurt_df is not None else []
 
         # ---- Shots (weapon_fire events) -------------------------------------
         # Each shot becomes a tiny tracer line on the radar so the viewer
@@ -670,7 +670,7 @@ class RealDemoParser:
         # numbers — no more 0-hardcoded assists / formula ADR / fake
         # KAST.
         agg = self._aggregate_player_stats(
-            players_meta, kills, hurt_raw, rounds, tickrate,
+            players_meta, kills, hurt_df, rounds, tickrate,
         )
         players = self._build_players(players_meta, kills, len(rounds), agg)
 
@@ -1232,7 +1232,7 @@ class RealDemoParser:
     def _aggregate_player_stats(
         players_meta: dict,
         kills: list[dict],
-        hurt_raw: list[dict],
+        hurt_df,
         rounds: list[dict],
         tickrate: float,
     ) -> dict:
@@ -1287,35 +1287,57 @@ class RealDemoParser:
                 or w == "weapon_incgrenade"
             )
 
-        for h in hurt_raw:
-            atk_raw = h.get("attacker_steamid")
-            vic_raw = h.get("user_steamid")
-            if atk_raw is None or _is_nan(atk_raw):
-                continue
-            atk = str(atk_raw).strip()
-            vic = str(vic_raw).strip() if vic_raw is not None and not _is_nan(vic_raw) else ""
-            if not atk or atk not in players_meta:
-                continue
-            # Self damage (fall / molotov on yourself / etc.).
-            if atk == vic:
-                continue
-            # Team damage. Skip when both players were on the same
-            # side at match start. Imperfect across halftime, but
-            # the player_hurt event in demoparser2 doesn't always
-            # carry per-tick team, and this matches the convention
-            # other CS2 stats sites use.
-            if vic and side_by_sid.get(atk) == side_by_sid.get(vic):
-                continue
+        # Vectorised path: keep the player_hurt DataFrame as a frame
+        # and iterate it column-major via the numpy arrays underneath.
+        # Materialising as a list-of-dicts (the old code path) blew
+        # past the 512 MB Hobby budget for big Bo3 demos and got the
+        # worker SIGKILL'd, leaving rows stuck in ``processing``.
+        if hurt_df is not None and len(hurt_df) > 0:
+            cols = getattr(hurt_df, "columns", [])
+            # Pull only the columns we actually use as numpy arrays.
+            # ``.to_numpy()`` is a zero-copy view of the underlying
+            # block when dtype is uniform, so peak RAM is the size of
+            # the original frame — not 2-3x as the dict copy was.
             try:
-                dmg = int(h.get("dmg_health") or 0)
-            except (TypeError, ValueError):
-                continue
-            if dmg <= 0:
-                continue
-            total_dmg[atk] += dmg
-            weapon = str(h.get("weapon") or "")
-            if _is_util(weapon):
-                util_dmg[atk] += dmg
+                atk_arr = hurt_df["attacker_steamid"].to_numpy() if "attacker_steamid" in cols else None
+                vic_arr = hurt_df["user_steamid"].to_numpy() if "user_steamid" in cols else None
+                dmg_arr = hurt_df["dmg_health"].to_numpy() if "dmg_health" in cols else None
+                wpn_arr = hurt_df["weapon"].to_numpy() if "weapon" in cols else None
+            except Exception:  # pragma: no cover — defensive
+                atk_arr = vic_arr = dmg_arr = wpn_arr = None
+
+            if atk_arr is not None and dmg_arr is not None:
+                n = len(atk_arr)
+                for i in range(n):
+                    atk_raw = atk_arr[i]
+                    if atk_raw is None or _is_nan(atk_raw):
+                        continue
+                    atk = str(atk_raw).strip()
+                    if not atk or atk not in players_meta:
+                        continue
+                    vic_raw = vic_arr[i] if vic_arr is not None else None
+                    if vic_raw is None or _is_nan(vic_raw):
+                        vic = ""
+                    else:
+                        vic = str(vic_raw).strip()
+                    if atk == vic:
+                        continue
+                    if vic and side_by_sid.get(atk) == side_by_sid.get(vic):
+                        continue
+                    try:
+                        dmg = int(dmg_arr[i] or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if dmg <= 0:
+                        continue
+                    total_dmg[atk] += dmg
+                    weapon = ""
+                    if wpn_arr is not None:
+                        w_raw = wpn_arr[i]
+                        if w_raw is not None and not _is_nan(w_raw):
+                            weapon = str(w_raw)
+                    if _is_util(weapon):
+                        util_dmg[atk] += dmg
 
         # Assists + flash assists, straight off the enriched kill list.
         for k in kills:

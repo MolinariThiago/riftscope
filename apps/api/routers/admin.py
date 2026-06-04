@@ -321,3 +321,74 @@ def admin_delete_demo(
     db.delete(demo)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/demos/reset-stuck")
+def admin_reset_stuck_demos(
+    older_than_minutes: int = 30,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Mark stale ``processing`` demos as ``failed`` so the UI unblocks.
+
+    A demo stays in ``status="processing"`` when the worker process is
+    killed mid-parse (Railway Hobby OOM, container restart, deploy
+    bounce). The exception path in ``process_demo`` never runs in
+    that case so the row never gets updated to ``failed``, and the
+    /pro card spins forever at 50/80/90%.
+
+    This endpoint is the manual recovery: any demo that's been
+    ``processing`` for more than ``older_than_minutes`` (default 30)
+    is flagged failed with a clear error message. It also clears the
+    matching ``ProMatch.import_status`` so the operator can hit
+    "Importar" again.
+
+    Returns the count of demos and matches updated.
+    """
+    from db.models.pro_match import ProMatch
+    from sqlalchemy import text
+
+    cutoff = utcnow_naive() - timedelta(minutes=max(1, older_than_minutes))
+
+    # Pull the stuck rows so we can also unstick the linked ProMatches
+    # in the same transaction.
+    stuck = (
+        db.query(Demo)
+        .filter(Demo.status == "processing")
+        .filter(Demo.uploaded_at < cutoff)
+        .all()
+    )
+    pro_match_ids = {d.pro_match_id for d in stuck if d.pro_match_id}
+
+    demos_reset = 0
+    for d in stuck:
+        d.status = "failed"
+        d.error_message = (
+            "Parsing aborted (worker killed mid-parse — likely OOM on Railway Hobby). "
+            "Re-upload or reduce concurrency."
+        )
+        demos_reset += 1
+
+    matches_reset = 0
+    if pro_match_ids:
+        # Clear import_status on the parent ProMatches so the manual
+        # "Importar" button works again. Only touch the ones that are
+        # still marked ``importing`` — don't clobber successful imports
+        # that just happen to share an id with a different stuck demo.
+        matches = (
+            db.query(ProMatch)
+            .filter(ProMatch.id.in_(pro_match_ids))
+            .filter(ProMatch.import_status == "importing")
+            .all()
+        )
+        for m in matches:
+            m.import_status = "failed"
+            m.import_error = "Worker killed mid-parse — try re-importing."
+            matches_reset += 1
+
+    db.commit()
+    return {
+        "demosReset": demos_reset,
+        "matchesReset": matches_reset,
+        "cutoff": cutoff.isoformat(),
+    }

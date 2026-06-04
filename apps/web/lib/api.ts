@@ -494,6 +494,15 @@ export const api = {
       ),
     deleteDemo: (demoId: number) =>
       request<{ ok: boolean }>(`/admin/demos/${demoId}`, { method: "DELETE" }),
+    /** Mark demos stuck in ``processing`` past the cutoff as ``failed``
+     *  so the UI unblocks. Returns the count of demos + linked
+     *  ProMatches that were updated. See backend
+     *  ``routers/admin.py::admin_reset_stuck_demos``. */
+    resetStuckDemos: (olderThanMinutes = 30) =>
+      request<{ demosReset: number; matchesReset: number; cutoff: string }>(
+        `/admin/demos/reset-stuck?older_than_minutes=${olderThanMinutes}`,
+        { method: "POST" },
+      ),
     /** Admin queue for the bottom-right feedback widget. */
     feedback: {
       list: (status?: FeedbackStatus, limit = 200) =>
