@@ -322,21 +322,27 @@ async def _import_step() -> None:
     cutoff = pro_cutoff_naive()
     db = SessionLocal()
     try:
-        # Candidates: completed matches with demo_url + no demo_id, on or
-        # after the cutoff date, AND inside the operator's allowed tier
-        # buckets (``PRO_AUTO_TIERS`` env — default S+/S/A/B). This stops
-        # the proxy budget from being burned on C-tier scrims and FACEIT
+        # Candidates: completed matches with no demo_id yet, on or after
+        # the cutoff date, AND inside the operator's allowed tier buckets
+        # (``PRO_AUTO_TIERS`` env — default S+/S/A/B). This stops the
+        # proxy budget from being burned on C-tier scrims and FACEIT
         # cups that nobody asked for; admins can still trigger a manual
         # import for those from the UI.
         # The env value is a plain string ("S+,S,A,B") so we split here —
         # see the comment in core/settings.py for why it's not List[str].
+        #
+        # NOTE: we DO NOT require ``demo_url IS NOT NULL`` here anymore.
+        # HltvSource intentionally leaves demo_url null at sync time
+        # (visiting every match page would double proxy traffic). The
+        # import worker scrapes the match page on demand and resolves the
+        # download link before grabbing the bytes, so a null demo_url is
+        # fine for auto-import.
         raw_tiers = get_settings().pro_auto_tiers or ""
         allowed_tiers = [t.strip() for t in raw_tiers.split(",") if t.strip()]
         q = (
             db.query(ProMatch)
             .filter(ProMatch.played_at >= cutoff)
             .filter(ProMatch.demo_id == None)  # noqa: E711
-            .filter(ProMatch.demo_url.isnot(None))
             .filter(ProMatch.score_a.isnot(None))
             .filter(ProMatch.score_b.isnot(None))
         )

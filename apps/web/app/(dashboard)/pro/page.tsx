@@ -109,8 +109,11 @@ export default function ProMatchesPage() {
   }, [pastMatches, dateFilter, search]);
 
   const watchableCount = pastMatches.filter((m) => m.demoId != null).length;
+  // "Importable" = match is over (has a score) and we haven't pulled the
+  // demo yet. demoUrl is optional now because HltvSource leaves it null
+  // and the import worker resolves it on demand from the match page.
   const importableCount = pastMatches.filter(
-    (m) => m.demoId == null && !!m.demoUrl,
+    (m) => m.demoId == null && m.scoreA != null && m.scoreB != null,
   ).length;
 
   // Group visible matches by date so the UI mirrors HLTV's
@@ -662,9 +665,17 @@ function MatchActions({ match }: { match: ProMatch }) {
     );
   }
 
-  // STATE: importable (has a HLTV demo URL but not imported yet) — also the
-  // retry path after a failed download.
-  if (match.demoUrl) {
+  // STATE: importable — match is over (has a score) and we haven't pulled
+  // the demo yet. Two sub-cases that both render the same button:
+  //   - demo_url is already known (we scraped it earlier or someone
+  //     uploaded it manually).
+  //   - demo_url is null but the match came from HltvSource. The import
+  //     worker scrapes the match page on demand to find the demo link, so
+  //     a null demo_url is still importable — we just can't deep-link to
+  //     HLTV without first resolving the slug. That's why the "HLTV" side
+  //     link is conditional on demoUrl below.
+  const hasScore = match.scoreA != null && match.scoreB != null;
+  if (hasScore) {
     const failed = match.importStatus === "failed";
     return (
       <div className="flex flex-col items-end gap-1">
@@ -691,15 +702,17 @@ function MatchActions({ match }: { match: ProMatch }) {
               </>
             )}
           </button>
-          <a
-            href={match.demoUrl.replace("/download/demo/", "/matches/")}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/70 hover:text-foreground"
-            title="Abrir en HLTV"
-          >
-            HLTV <ExternalLink size={9} />
-          </a>
+          {match.demoUrl && (
+            <a
+              href={match.demoUrl.replace("/download/demo/", "/matches/")}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/70 hover:text-foreground"
+              title="Abrir en HLTV"
+            >
+              HLTV <ExternalLink size={9} />
+            </a>
+          )}
         </div>
         {failed && match.importError && (
           <div className="text-[10px] max-w-xs text-right rounded-md px-2 py-1 bg-loss/10 text-loss border border-loss/30">
@@ -715,7 +728,7 @@ function MatchActions({ match }: { match: ProMatch }) {
     );
   }
 
-  // STATE: no demo available — just show a neutral indicator.
+  // STATE: match isn't actually over yet (no score) — neutral indicator.
   return (
     <span className="text-[10px] font-mono-rs text-muted-foreground/60 uppercase">
       sin demo
