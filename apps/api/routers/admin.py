@@ -323,6 +323,88 @@ def admin_delete_demo(
     return {"ok": True}
 
 
+@router.post("/demos/retry-failed")
+async def admin_retry_failed_demos(
+    pro_only: bool = False,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Re-queue every ``failed`` demo for parsing without touching disk.
+
+    Reuses the same ``process_demo`` pipeline the per-demo
+    ``/demos/{id}/reprocess`` endpoint hits — flips status back to
+    ``queued`` and schedules a fresh parse task. The .dem (or .rar)
+    bytes are still on storage, so no re-download is needed: the
+    worker just walks the file again with the current parser.
+
+    Args:
+      pro_only: when True, only retries demos linked to a ProMatch
+        (skips solo uploads). Useful right after auto-import
+        regressions.
+      limit: cap the number of demos re-queued per call so the worker
+        isn't flooded.  Default 50.
+
+    Returns:
+      ``{"requeued": N, "skipped": M, "demoIds": [...]}`` so the UI
+      can show what actually moved.
+    """
+    from services.storage import get_storage
+    from workers.demo_worker import schedule_demo_processing
+
+    storage = get_storage()
+    bucket = getattr(storage, "bucket", None)
+
+    q = db.query(Demo).filter(Demo.status == "failed")
+    if pro_only:
+        q = q.filter(Demo.pro_match_id.isnot(None))
+    candidates: list[Demo] = (
+        q.order_by(Demo.uploaded_at.desc()).limit(max(1, min(500, limit))).all()
+    )
+
+    requeued_ids: list[int] = []
+    skipped = 0
+
+    for demo in candidates:
+        # Defensive: the file has to be reachable. For S3 we trust the
+        # bucket; for local we verify the path exists so a known-dead
+        # demo doesn't get re-queued just to fail the same way.
+        if not demo.storage_filename:
+            skipped += 1
+            continue
+        if bucket:
+            abs_path = f"s3://{bucket}/{demo.storage_filename}"
+        else:
+            try:
+                local = storage.get_path(demo.storage_filename)
+                if not local.exists():
+                    skipped += 1
+                    continue
+                abs_path = str(local)
+            except Exception:  # pragma: no cover — defensive
+                skipped += 1
+                continue
+
+        demo.status = "queued"
+        demo.processing_progress = 0
+        demo.error_message = None
+        demo.processed_at = None
+        requeued_ids.append(demo.id)
+
+        # Schedule on the running event loop. ``schedule_demo_processing``
+        # keeps a strong reference to the spawned task via core.bg.spawn
+        # so the GC won't collect it mid-parse.
+        schedule_demo_processing(demo.id, abs_path)
+
+    db.commit()
+    return {
+        "requeued": len(requeued_ids),
+        "skipped": skipped,
+        "demoIds": requeued_ids,
+        "proOnly": pro_only,
+    }
+
+
 @router.post("/demos/reset-stuck")
 def admin_reset_stuck_demos(
     older_than_minutes: int = 30,

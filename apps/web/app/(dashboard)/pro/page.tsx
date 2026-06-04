@@ -11,6 +11,7 @@ import {
   Download,
   ExternalLink,
   RotateCcw,
+  RefreshCcw,
   Loader2,
   PlayCircle,
   Plus,
@@ -82,6 +83,15 @@ export default function ProMatchesPage() {
   // ``routers/admin.py::admin_reset_stuck_demos``.
   const resetStuck = useMutation({
     mutationFn: () => api.admin.resetStuckDemos(30),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
+  });
+
+  // Re-queue every ``failed`` pro demo for parsing. Reuses the on-disk
+  // .dem bytes — no re-download, no manual delete + re-upload. Scoped
+  // to ``proOnly=true`` so a stray solo upload that failed for a
+  // legit reason isn't accidentally retried alongside.
+  const retryFailed = useMutation({
+    mutationFn: () => api.admin.retryFailedDemos(true, 50),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
 
@@ -250,6 +260,24 @@ export default function ProMatchesPage() {
               Reset atascadas
             </button>
             <button
+              onClick={() => retryFailed.mutate()}
+              disabled={retryFailed.isPending}
+              title="Vuelve a parsear todas las demos pro que fallaron (reutiliza los bytes ya descargados, no toca disco)"
+              className={cn(
+                "inline-flex items-center gap-2 px-3 py-2.5 rounded-lg",
+                "bg-surface-elevated text-foreground/80 text-xs font-semibold border border-border",
+                "hover:bg-surface hover:text-foreground hover:border-border-strong",
+                "disabled:opacity-50 transition-colors whitespace-nowrap",
+              )}
+            >
+              {retryFailed.isPending ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <RefreshCcw size={13} />
+              )}
+              Reintentar fallidas
+            </button>
+            <button
               onClick={() => sync.mutate()}
               disabled={sync.isPending}
               title="Pull manual de Liquipedia (el scheduler lo hace cada 15 min)"
@@ -373,6 +401,40 @@ export default function ProMatchesPage() {
             <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-loss/10 border border-loss/30 text-loss">
               <AlertCircle size={11} />
               <span>Reset falló · ver logs</span>
+            </div>
+          )}
+          {/* Retry-failed result — green when at least one demo was
+              re-queued, muted when nothing matched. ``skipped`` flags
+              demos whose .dem file is missing on storage (those need a
+              full re-upload, retry alone won't help). */}
+          {retryFailed.data && (
+            <div
+              className={cn(
+                "inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md",
+                retryFailed.data.requeued > 0
+                  ? "bg-win/10 border border-win/30 text-win"
+                  : "bg-surface-elevated border border-border text-muted-foreground",
+              )}
+            >
+              <CheckCircle2 size={11} />
+              {retryFailed.data.requeued > 0 ? (
+                <span>
+                  Reencoladas{" "}
+                  <span className="text-foreground">{retryFailed.data.requeued}</span>{" "}
+                  demos fallidas
+                  {retryFailed.data.skipped > 0 && (
+                    <> · {retryFailed.data.skipped} sin archivo (re-subir)</>
+                  )}
+                </span>
+              ) : (
+                <span>Sin demos fallidas para reintentar</span>
+              )}
+            </div>
+          )}
+          {retryFailed.isError && (
+            <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-loss/10 border border-loss/30 text-loss">
+              <AlertCircle size={11} />
+              <span>Retry falló · ver logs</span>
             </div>
           )}
           {sync.data && (

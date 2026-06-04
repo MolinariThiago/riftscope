@@ -503,6 +503,20 @@ export const api = {
         `/admin/demos/reset-stuck?older_than_minutes=${olderThanMinutes}`,
         { method: "POST" },
       ),
+    /** Re-queue every ``failed`` demo for parsing without touching
+     *  disk. ``proOnly=true`` limits to demos linked to a ProMatch
+     *  (skips solo uploads). See backend
+     *  ``routers/admin.py::admin_retry_failed_demos``. */
+    retryFailedDemos: (proOnly = false, limit = 50) =>
+      request<{
+        requeued: number;
+        skipped: number;
+        demoIds: number[];
+        proOnly: boolean;
+      }>(
+        `/admin/demos/retry-failed?pro_only=${proOnly}&limit=${limit}`,
+        { method: "POST" },
+      ),
     /** Admin queue for the bottom-right feedback widget. */
     feedback: {
       list: (status?: FeedbackStatus, limit = 200) =>
