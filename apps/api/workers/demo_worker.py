@@ -248,6 +248,8 @@ def _persist_normalized(demo_id: int, analysis: dict[str, Any]) -> None:
                 utility_damage=p.get("utilityDamage", 0),
                 flash_assists=p.get("flashAssists", 0),
                 mvp_rounds=p.get("mvpRounds", 0),
+                total_damage=p.get("totalDamage", 0),
+                kast_rounds=p.get("kastRounds", 0),
             ))
 
         # Rounds

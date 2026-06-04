@@ -164,6 +164,13 @@ class DemoPlayer(Base):
     utility_damage = Column(Integer, default=0, nullable=False)
     flash_assists = Column(Integer, default=0, nullable=False)
     mvp_rounds = Column(Integer, default=0, nullable=False)
+    # Raw counts so cross-demo aggregation in the leaderboard endpoint
+    # can recompute rates correctly. ADR = SUM(total_damage) /
+    # SUM(demo.round_count); KAST = 100 * SUM(kast_rounds) /
+    # SUM(demo.round_count). Storing rates would mean averaging
+    # rates across demos with different round counts, which is wrong.
+    total_damage = Column(Integer, default=0, nullable=False)
+    kast_rounds = Column(Integer, default=0, nullable=False)
 
     demo = relationship("Demo", back_populates="players")
 

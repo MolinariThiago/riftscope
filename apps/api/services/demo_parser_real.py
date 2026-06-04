@@ -252,6 +252,16 @@ class RealDemoParser:
         deaths_df = _safe_event(parser, "player_death")
         kills_raw = deaths_df.to_dict(orient="records") if deaths_df is not None else []
 
+        # ---- Damage events (for real ADR + utility damage) ------------------
+        # ``player_hurt`` fires for every damage tick (bullets, grenades,
+        # knife, etc.). Sum ``dmg_health`` per attacker for true ADR
+        # instead of the formula estimate the old build used. Filter
+        # self-damage and team-damage (attacker_team_num == victim_team_num).
+        # Utility damage is the subset where the weapon is a grenade
+        # (he / molotov / incendiary / inferno).
+        hurt_df = _safe_event(parser, "player_hurt")
+        hurt_raw = hurt_df.to_dict(orient="records") if hurt_df is not None else []
+
         # ---- Shots (weapon_fire events) -------------------------------------
         # Each shot becomes a tiny tracer line on the radar so the viewer
         # can see every bullet fired in a round — not just the kill shots.
@@ -654,7 +664,15 @@ class RealDemoParser:
             logger.debug("clan extraction skipped: %s", _exc)
 
         # ---- Players summary stats (computed from kills + tick samples) -----
-        players = self._build_players(players_meta, kills, len(rounds))
+        # Aggregate real data first: damage (player_hurt), assists +
+        # flash-assists + per-round K/A/S/T flags (from the enriched
+        # kill list). The result feeds ``_build_players`` with real
+        # numbers — no more 0-hardcoded assists / formula ADR / fake
+        # KAST.
+        agg = self._aggregate_player_stats(
+            players_meta, kills, hurt_raw, rounds, tickrate,
+        )
+        players = self._build_players(players_meta, kills, len(rounds), agg)
 
         # ---- Score (from rounds) --------------------------------------------
         ct_score = sum(1 for r in rounds if r["winner"] == "ct")
@@ -1094,6 +1112,19 @@ class RealDemoParser:
                 continue
             kpos = pos_lookup.get((t, atk)) or (0.0, 0.0, 0.0)
             vpos = pos_lookup.get((t, vic)) or (0.0, 0.0, 0.0)
+            # ``assister_steamid`` is the player credited with the
+            # assist on this kill (empty / "0" / NaN when there was
+            # none).  ``assistedflash`` is True when that assist was
+            # earned via a flashbang.  Both feed the leaderboard's
+            # real assists / flash-assists / KAST aggregation in
+            # ``_aggregate_player_stats`` below.
+            assister_raw = k.get("assister_steamid")
+            if assister_raw is None or _is_nan(assister_raw):
+                assister_sid = ""
+            else:
+                assister_sid = str(assister_raw).strip()
+                if assister_sid in {"", "0"} or assister_sid not in players_meta:
+                    assister_sid = ""
             kill = {
                 "tick": t,
                 "round": rnum,
@@ -1104,6 +1135,8 @@ class RealDemoParser:
                 "throughSmoke": bool(k.get("thrusmoke") or False),
                 "blinded": bool(k.get("attackerblind") or False),
                 "isOpeningKill": False,
+                "assister": assister_sid,
+                "assistedFlash": bool(k.get("assistedflash") or False) and bool(assister_sid),
                 "killerPos": [int(kpos[0]), int(kpos[1]), int(kpos[2])],
                 "victimPos": [int(vpos[0]), int(vpos[1]), int(vpos[2])],
             }
@@ -1196,12 +1229,177 @@ class RealDemoParser:
         return out
 
     @staticmethod
+    def _aggregate_player_stats(
+        players_meta: dict,
+        kills: list[dict],
+        hurt_raw: list[dict],
+        rounds: list[dict],
+        tickrate: float,
+    ) -> dict:
+        """Build the real per-player aggregates the leaderboard needs.
+
+        Returns a dict with these keys (all map steamid -> int):
+
+        - ``total_dmg``: sum of player_hurt.dmg_health dealt by the
+          player (excluding self / team damage).
+        - ``util_dmg``: subset of total_dmg where the damaging weapon
+          was a grenade (he / molotov / incendiary / inferno).
+        - ``assists``: count of ``player_death`` events crediting the
+          player as assister (non-flash).
+        - ``flash_assists``: count of those assists where the kill was
+          flagged ``assistedflash``.
+        - ``kast_rounds``: rounds in which the player got a Kill,
+          Assist (incl. flash), Survived, or was Traded (their killer
+          died within ~5s after the player's death).
+
+        These numbers are what make a HLTV-2.0-style leaderboard
+        credible: ADR = total_dmg / rounds_played, KAST =
+        kast_rounds / rounds_played, Impact = 2.13·KPR + 0.42·APR
+        − 0.41. Cross-demo aggregation in the leaderboard endpoint
+        sums these as raw counts (not rates) and then divides by
+        total rounds played, which is mathematically correct.
+        """
+        total_dmg: dict[str, int] = defaultdict(int)
+        util_dmg: dict[str, int] = defaultdict(int)
+        assists: dict[str, int] = defaultdict(int)
+        flash_assists: dict[str, int] = defaultdict(int)
+
+        # Side per player (constant across the match). Used to skip
+        # team damage in player_hurt. We can't trust per-tick team
+        # because hurt rows don't carry it on every demoparser2 build
+        # — but the per-player meta is set from the start lineup
+        # which is good enough (team-damage to teammates we swapped
+        # with at half is still same-team).
+        side_by_sid = {sid: m.get("team") for sid, m in players_meta.items()}
+
+        # Grenade-weapon prefixes (substring match against the
+        # weapon string player_hurt reports). Covers the common
+        # variants demoparser2 emits across CS2 patches.
+        def _is_util(weapon: str) -> bool:
+            w = weapon.lower()
+            return (
+                w.startswith("hegrenade")
+                or w.startswith("weapon_hegrenade")
+                or w.startswith("inferno")
+                or w.startswith("molotov")
+                or w.startswith("incgrenade")
+                or w == "weapon_molotov"
+                or w == "weapon_incgrenade"
+            )
+
+        for h in hurt_raw:
+            atk_raw = h.get("attacker_steamid")
+            vic_raw = h.get("user_steamid")
+            if atk_raw is None or _is_nan(atk_raw):
+                continue
+            atk = str(atk_raw).strip()
+            vic = str(vic_raw).strip() if vic_raw is not None and not _is_nan(vic_raw) else ""
+            if not atk or atk not in players_meta:
+                continue
+            # Self damage (fall / molotov on yourself / etc.).
+            if atk == vic:
+                continue
+            # Team damage. Skip when both players were on the same
+            # side at match start. Imperfect across halftime, but
+            # the player_hurt event in demoparser2 doesn't always
+            # carry per-tick team, and this matches the convention
+            # other CS2 stats sites use.
+            if vic and side_by_sid.get(atk) == side_by_sid.get(vic):
+                continue
+            try:
+                dmg = int(h.get("dmg_health") or 0)
+            except (TypeError, ValueError):
+                continue
+            if dmg <= 0:
+                continue
+            total_dmg[atk] += dmg
+            weapon = str(h.get("weapon") or "")
+            if _is_util(weapon):
+                util_dmg[atk] += dmg
+
+        # Assists + flash assists, straight off the enriched kill list.
+        for k in kills:
+            aid = k.get("assister") or ""
+            if not aid:
+                continue
+            if k.get("assistedFlash"):
+                flash_assists[aid] += 1
+            else:
+                assists[aid] += 1
+
+        # ---- KAST per round ------------------------------------------------
+        # Pre-index kills by round for the per-round walk.
+        kills_by_round: dict[int, list[dict]] = defaultdict(list)
+        for k in kills:
+            kills_by_round[k["round"]].append(k)
+
+        # Trade window: HLTV uses 5 seconds. tickrate is ~64 in CS2.
+        trade_window_ticks = int(max(1.0, tickrate) * 5.0)
+        kast_rounds: dict[str, int] = defaultdict(int)
+        all_sids = list(players_meta.keys())
+
+        for r in rounds:
+            rnum = r["number"]
+            round_kills = kills_by_round.get(rnum, [])
+
+            killers_in_round: set[str] = set()
+            assisters_in_round: set[str] = set()
+            victims_in_round: dict[str, dict] = {}
+            for k in round_kills:
+                killers_in_round.add(k["killer"])
+                if k.get("assister"):
+                    assisters_in_round.add(k["assister"])
+                # Keep the FIRST death of each player in the round
+                # — that's the one the trade window applies to.
+                if k["victim"] not in victims_in_round:
+                    victims_in_round[k["victim"]] = k
+
+            # Trade lookup: for each death of player V at tick t,
+            # was V's killer (K) killed within ``trade_window`` ticks?
+            traded: set[str] = set()
+            for v_sid, death_k in victims_in_round.items():
+                k_sid = death_k["killer"]
+                death_tick = death_k["tick"]
+                for k2 in round_kills:
+                    if k2["victim"] != k_sid:
+                        continue
+                    if 0 <= (k2["tick"] - death_tick) <= trade_window_ticks:
+                        traded.add(v_sid)
+                        break
+
+            for sid in all_sids:
+                if (
+                    sid in killers_in_round
+                    or sid in assisters_in_round
+                    or sid not in victims_in_round  # survived
+                    or sid in traded
+                ):
+                    kast_rounds[sid] += 1
+
+        return {
+            "total_dmg": dict(total_dmg),
+            "util_dmg": dict(util_dmg),
+            "assists": dict(assists),
+            "flash_assists": dict(flash_assists),
+            "kast_rounds": dict(kast_rounds),
+        }
+
+    @staticmethod
     def _build_players(
         players_meta: dict,
         kills: list[dict],
         round_count: int,
+        agg: dict | None = None,
     ) -> list[dict]:
-        """Aggregate per-player stats from the real kill list."""
+        """Aggregate per-player stats from the real kill list.
+
+        ``agg`` is the dict returned by ``_aggregate_player_stats``
+        and carries the real damage / assist / KAST numbers. When
+        absent (defensive fallback / legacy call sites) the per-player
+        fields fall back to 0 — never to fake formula estimates,
+        because the leaderboard aggregates those across demos and
+        averaging a fake number poisons the ranking.
+        """
         kills_by_killer: dict[str, list[dict]] = defaultdict(list)
         deaths_by_victim: dict[str, list[dict]] = defaultdict(list)
         opening_kills: dict[str, int] = defaultdict(int)
@@ -1214,6 +1412,14 @@ class RealDemoParser:
                 opening_kills[k["killer"]] += 1
                 opening_deaths[k["victim"]] += 1
 
+        total_dmg_by = (agg or {}).get("total_dmg", {})
+        util_dmg_by = (agg or {}).get("util_dmg", {})
+        assists_by = (agg or {}).get("assists", {})
+        flash_assists_by = (agg or {}).get("flash_assists", {})
+        kast_rounds_by = (agg or {}).get("kast_rounds", {})
+
+        rounds_f = float(round_count) if round_count else 0.0
+
         out: list[dict] = []
         for sid, info in players_meta.items():
             ks = kills_by_killer[sid]
@@ -1222,9 +1428,44 @@ class RealDemoParser:
             deaths_n = len(ds)
             hs = sum(1 for k in ks if k["headshot"])
             hs_pct = int((hs / kills_n) * 100) if kills_n else 0
-            adr = round(min(140.0, kills_n * 4.5 + len(ks) * 1.2), 1) if round_count else 0.0
-            kast = int(min(95, 50 + kills_n * 1.4 - deaths_n * 0.6))
-            rating = round(0.6 + (kills_n - deaths_n) * 0.04 + adr * 0.005, 2)
+
+            assists_n = int(assists_by.get(sid, 0))
+            flash_n = int(flash_assists_by.get(sid, 0))
+            total_dmg_n = int(total_dmg_by.get(sid, 0))
+            util_dmg_n = int(util_dmg_by.get(sid, 0))
+            kast_rounds_n = int(kast_rounds_by.get(sid, 0))
+
+            if rounds_f > 0:
+                adr = round(total_dmg_n / rounds_f, 1)
+                kpr = kills_n / rounds_f
+                dpr = deaths_n / rounds_f
+                # APR counts both regular assists and flash assists —
+                # they both contribute to round impact.
+                apr = (assists_n + flash_n) / rounds_f
+                kast = int(round(100.0 * kast_rounds_n / rounds_f))
+            else:
+                adr = 0.0
+                kpr = dpr = apr = 0.0
+                kast = 0
+
+            # HLTV Rating 2.0 (public coefficients).
+            # Impact = 2.13·KPR + 0.42·APR − 0.41.
+            # Rating = 0.0073·KAST + 0.3591·KPR − 0.5329·DPR
+            #          + 0.2372·Impact + 0.0032·ADR + 0.1587.
+            if rounds_f > 0:
+                impact = 2.13 * kpr + 0.42 * apr - 0.41
+                rating_raw = (
+                    0.0073 * kast
+                    + 0.3591 * kpr
+                    + -0.5329 * dpr
+                    + 0.2372 * impact
+                    + 0.0032 * adr
+                    + 0.1587
+                )
+                rating = round(max(0.0, rating_raw), 2)
+            else:
+                rating = 0.0
+
             out.append({
                 "steamId": sid,
                 "name": info["name"],
@@ -1232,7 +1473,7 @@ class RealDemoParser:
                 "clan": info.get("clan"),
                 "kills": kills_n,
                 "deaths": deaths_n,
-                "assists": 0,  # TODO: from player_death.assister_steamid
+                "assists": assists_n,
                 "headshots": hs,
                 "adr": adr,
                 "kast": kast,
@@ -1242,9 +1483,14 @@ class RealDemoParser:
                 "openingDeaths": opening_deaths[sid],
                 "clutchWins": 0,
                 "clutchAttempts": 0,
-                "utilityDamage": 0,
-                "flashAssists": 0,
+                "utilityDamage": util_dmg_n,
+                "flashAssists": flash_n,
                 "mvpRounds": 0,
+                # Raw counts so cross-demo aggregation in the
+                # leaderboard endpoint can recompute rates correctly
+                # (sum counts, divide by sum-of-rounds).
+                "totalDamage": total_dmg_n,
+                "kastRounds": kast_rounds_n,
             })
         out.sort(key=lambda p: p["rating"], reverse=True)
         return out

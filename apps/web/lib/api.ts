@@ -31,6 +31,10 @@ import type {
   FeedbackPublic,
   FeedbackStatus,
 } from "@/types/feedback";
+import type {
+  LeaderboardQuery,
+  LeaderboardResponse,
+} from "@/types/leaderboards";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -177,6 +181,23 @@ export const api = {
       request<void>(`/teams/${id}/leave`, { method: "POST" }),
     delete: (id: number) =>
       request<void>(`/teams/${id}`, { method: "DELETE" }),
+  },
+
+  leaderboards: {
+    /** Fetch the HLTV-2.0-rated player leaderboard. All filters are
+     *  optional — calling with no args returns the top 30 across every
+     *  completed demo with ≥16 rounds played. */
+    list: (q: LeaderboardQuery = {}) => {
+      const params = new URLSearchParams();
+      if (q.map) params.set("map", q.map);
+      if (q.since) params.set("since", q.since);
+      if (q.minRounds !== undefined) params.set("min_rounds", String(q.minRounds));
+      if (q.limit !== undefined) params.set("limit", String(q.limit));
+      const qs = params.toString();
+      return request<LeaderboardResponse>(
+        `/leaderboards${qs ? `?${qs}` : ""}`,
+      );
+    },
   },
 
   antiStrat: {

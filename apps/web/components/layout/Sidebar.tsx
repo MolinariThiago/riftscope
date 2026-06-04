@@ -15,7 +15,6 @@ import {
   Telescope,
   Trophy,
   Upload,
-  Users,
 } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -42,12 +41,10 @@ const navItems: NavSpec[] = [
   { href: "/pro",           icon: Trophy,    labelKey: "nav.proMatches" },
 ];
 
-// Pre-beta sections — hidden from regular users until they're polished.
-// Only admins see these in the sidebar (see ``isAdmin`` gate in render).
-const adminNavItems: NavSpec[] = [
-  { href: "/players",       icon: Users,     labelKey: "nav.players" },
-  { href: "/compare",       icon: BarChart2, labelKey: "nav.compare" },
-];
+// /players and /compare were superseded by /leaderboards — see the
+// rendered "Leaderboards" item below (public, beta). The /admin pages
+// list demos and feedback separately so we don't lose anything.
+const adminNavItems: NavSpec[] = [];
 
 const bottomItems: NavSpec[] = [
   { href: "/settings", icon: Settings, labelKey: "nav.settings" },
@@ -137,6 +134,17 @@ export function Sidebar({ forceCollapsed = false }: SidebarProps) {
               collapsed={collapsed}
             />
           ))}
+        {/* Leaderboards — public, beta. HLTV-Rating-2.0-ranked board
+            across every completed demo. Replaces the old admin-only
+            /players + /compare pages. */}
+        <SidebarItem
+          href="/leaderboards"
+          icon={BarChart2}
+          label="Leaderboards"
+          active={pathname === "/leaderboards" || pathname.startsWith("/leaderboards/")}
+          collapsed={collapsed}
+          beta
+        />
         {/* Tactical board + playbook — public, but flagged ``beta``. */}
         <SidebarItem
           href="/tactics"

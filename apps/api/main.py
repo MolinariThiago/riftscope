@@ -33,6 +33,7 @@ from routers import (
     auth,
     demos,
     feedback,
+    leaderboards,
     maps,
     players,
     playbook,
@@ -142,6 +143,19 @@ def _ensure_steam_columns() -> None:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE demo_players ADD COLUMN clan_name VARCHAR"))
                 logger.info("migrated demo_players table: added clan_name")
+        # Leaderboard raw counters — see DemoPlayer.total_damage /
+        # kast_rounds. Default 0 so legacy rows aggregate as
+        # zero-contribution until they're re-processed (the parser
+        # populates these going forward).
+        for col_name in ("total_damage", "kast_rounds"):
+            if col_name not in existing_dp:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE demo_players ADD COLUMN {col_name} INTEGER DEFAULT 0 NOT NULL"
+                        )
+                    )
+                    logger.info("migrated demo_players table: added %s", col_name)
 
 
 def _backfill_pro_match_demo_links() -> None:
@@ -276,6 +290,9 @@ async def health():
 
 app.include_router(demos.router, prefix="/demos", tags=["demos"])
 app.include_router(players.router, prefix="/players", tags=["players"])
+app.include_router(
+    leaderboards.router, prefix="/leaderboards", tags=["leaderboards"]
+)
 app.include_router(maps.router, prefix="/maps", tags=["maps"])
 app.include_router(playbook.router, prefix="/playbooks", tags=["playbooks"])
 app.include_router(

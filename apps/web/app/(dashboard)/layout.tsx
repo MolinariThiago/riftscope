@@ -63,7 +63,10 @@ export default function DashboardLayout({
   // list in sync with the ``isAdmin`` gates in Sidebar.tsx.
   useEffect(() => {
     if (!authChecked || user === null || user.is_admin) return;
-    const adminOnly = ["/players", "/compare", "/anti-strat", "/vetos", "/pre-match"];
+    // /players and /compare were folded into /leaderboards (public,
+    // beta) — the entries below are strictly the admin-only sections
+    // that remain.
+    const adminOnly = ["/anti-strat", "/vetos", "/pre-match"];
     const blocked = adminOnly.some(
       (p) => pathname === p || pathname.startsWith(p + "/"),
     );
