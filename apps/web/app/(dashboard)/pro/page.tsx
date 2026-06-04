@@ -53,22 +53,27 @@ export default function ProMatchesPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["pro-matches"],
     queryFn: () => api.pro.matches(200),
-    // Poll fast while any match is mid-download so its "Descargando…"
-    // state updates promptly; idle back to once a minute otherwise.
+    // Poll fast (5 s) only when something is actively downloading so
+    // the "Descargando…" chip updates promptly. Idle to 2 minutes
+    // otherwise — the user noted the constant background traffic
+    // felt chatty, and import/parse cycles take 5-30 min anyway so a
+    // 2-minute refresh is plenty of resolution.
     refetchInterval: (query) =>
       (query.state.data?.matches ?? []).some(
         (m) => m.importStatus === "importing",
       )
         ? 5_000
-        : 60_000,
+        : 120_000,
   });
 
   const { data: schedulerStatus } = useQuery({
     queryKey: ["pro-scheduler"],
     queryFn: () => api.pro.schedulerStatus(),
-    // Poll less aggressively — the scheduler ticks every 30 s anyway,
-    // and this is purely informational. Stale data here is fine.
-    refetchInterval: 30_000,
+    // Scheduler chips are purely informational (budget / cooldown /
+    // backlog). One refresh per minute is plenty — the underlying
+    // tick still runs every 30 s in the backend, but the UI doesn't
+    // need to mirror that cadence.
+    refetchInterval: 60_000,
   });
 
   const sync = useMutation({

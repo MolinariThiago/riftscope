@@ -72,10 +72,18 @@ def _env_bool(key: str, default: bool) -> bool:
 
 
 ENABLED                 = _env_bool("PRO_SCHEDULER_ENABLED",     True)
-SYNC_INTERVAL_SECONDS   = _env_int("PRO_SYNC_INTERVAL_SECONDS",  900)
+# Default bumped from 900 (15 min) to 1800 (30 min) — the user noted
+# the scraper felt too chatty for the actual freshness need. New
+# matches on HLTV /results stay on the page for hours; 30 min is
+# plenty and halves the proxy hits for the discovery step.
+SYNC_INTERVAL_SECONDS   = _env_int("PRO_SYNC_INTERVAL_SECONDS",  1800)
 IMPORT_GAP_SECONDS      = _env_int("PRO_IMPORT_GAP_SECONDS",     60)
 MAX_IMPORTS_PER_TICK    = _env_int("PRO_MAX_IMPORTS_PER_TICK",   5)
 TICK_INTERVAL_SECONDS   = 30  # how often the loop wakes up
+# Skip the sync step when the import backlog is already this big.
+# No point scraping more matches when we can't even import what we
+# already have queued up. Set to 0 to disable the backlog gate.
+SYNC_SKIP_BACKLOG       = _env_int("PRO_SYNC_SKIP_BACKLOG",      50)
 # Serialise downloads behind parsing: after queueing a demo for the
 # worker, wait until every Demo linked to that ProMatch reaches a
 # terminal state (completed / failed) before scraping the next
@@ -131,6 +139,7 @@ _state: dict[str, Any] = {
     "last_tick_at": None,
     "last_sync_at": None,
     "last_sync_result": None,    # {"inserted": int, "updated": int, "errors": int}
+    "last_sync_skip": None,      # {"reason": "...", "at": "..."} when we skipped a sync window
     "last_import_count": 0,      # imports queued in the last tick
     "last_import_errors": 0,
     "last_import_status": None,  # {"queued": int, "rar": int, "fail": int, ...}
@@ -147,6 +156,7 @@ def scheduler_status() -> dict[str, Any]:
         "wait_for_parse": WAIT_FOR_PARSE,
         "parse_wait_timeout_seconds": PARSE_WAIT_TIMEOUT,
         "daily_budget": _budget_snapshot(),
+        "sync_skip_backlog": SYNC_SKIP_BACKLOG,
         "index_from": get_pro_cutoff().isoformat(),
         # RAR extraction state — surfaces whether unrar is available
         # so the UI can warn the operator if HLTV's .rar demos are
@@ -243,16 +253,31 @@ async def _run_loop() -> None:
             tick_started = asyncio.get_event_loop().time()
             _state["last_tick_at"] = datetime.now(timezone.utc).isoformat()
 
-            # SYNC step — Liquipedia pull. First run always syncs so
-            # the user sees something quickly after a cold start.
+            # SYNC step — HLTV pull. First run always syncs so the
+            # user sees something quickly after a cold start.
+            # Otherwise wait for the interval AND verify there's a
+            # reason to scrape (budget left + backlog isn't already
+            # buried). Each skip saves one HLTV /results hit.
             if (
                 first_run
                 or (tick_started - last_sync_monotonic) >= SYNC_INTERVAL_SECONDS
             ):
-                try:
-                    await _sync_step()
-                except Exception:
-                    logger.exception("scheduler sync step failed")
+                skip_reason = _sync_skip_reason() if not first_run else None
+                if skip_reason:
+                    logger.info(
+                        "scheduler: skipping sync (%s) — next attempt in %ds",
+                        skip_reason, SYNC_INTERVAL_SECONDS,
+                    )
+                    _state["last_sync_skip"] = {
+                        "reason": skip_reason,
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    }
+                else:
+                    try:
+                        await _sync_step()
+                    except Exception:
+                        logger.exception("scheduler sync step failed")
+                    _state["last_sync_skip"] = None
                 last_sync_monotonic = tick_started
 
             # IMPORT step — drain the backlog of completed matches
@@ -390,6 +415,54 @@ def _bytes_downloaded_today() -> int:
         return int(total or 0)
     finally:
         db.close()
+
+
+def _import_backlog_size() -> int:
+    """Count of matches that are eligible for auto-import but not yet
+    imported. Same filters the import step applies, so this number is
+    the actual queue depth the scheduler would draw from."""
+    cutoff = pro_cutoff_naive()
+    raw_tiers = get_settings().pro_auto_tiers or ""
+    allowed_tiers = [t.strip() for t in raw_tiers.split(",") if t.strip()]
+    db = SessionLocal()
+    try:
+        q = (
+            db.query(ProMatch.id)
+            .filter(ProMatch.played_at >= cutoff)
+            .filter(ProMatch.demo_id == None)  # noqa: E711
+            .filter(ProMatch.score_a.isnot(None))
+            .filter(ProMatch.score_b.isnot(None))
+        )
+        if allowed_tiers:
+            q = q.filter(ProMatch.tier.in_(allowed_tiers))
+        return q.count()
+    finally:
+        db.close()
+
+
+def _sync_skip_reason() -> str | None:
+    """Return a one-line reason to SKIP the next sync, or None to proceed.
+
+    Two reasons we don't bother hitting HLTV /results:
+      - ``budget_exhausted``: today's download budget is gone, so
+        even if sync finds new matches the import step can't act on
+        them. Saves one proxy hit per skipped window.
+      - ``backlog_full``: there are already ``SYNC_SKIP_BACKLOG`` or
+        more matches eligible for import but unimported. Adding more
+        rows to the queue when we can't drain it is wasted scraping.
+    """
+    if DAILY_DOWNLOAD_LIMIT_GB > 0:
+        used = _bytes_downloaded_today()
+        if used >= DAILY_DOWNLOAD_LIMIT_GB * (1024 ** 3):
+            return "budget_exhausted"
+    if SYNC_SKIP_BACKLOG > 0:
+        try:
+            backlog = _import_backlog_size()
+        except Exception:  # pragma: no cover — defensive
+            backlog = 0
+        if backlog >= SYNC_SKIP_BACKLOG:
+            return f"backlog_full ({backlog})"
+    return None
 
 
 def _budget_snapshot() -> dict[str, Any]:
