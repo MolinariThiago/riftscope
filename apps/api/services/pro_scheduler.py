@@ -143,6 +143,7 @@ _state: dict[str, Any] = {
     "last_import_count": 0,      # imports queued in the last tick
     "last_import_errors": 0,
     "last_import_status": None,  # {"queued": int, "rar": int, "fail": int, ...}
+    "reimport_queue": 0,         # matches with demo_id NULL but import_completed_at IS NOT NULL
 }
 
 
@@ -157,6 +158,10 @@ def scheduler_status() -> dict[str, Any]:
         "parse_wait_timeout_seconds": PARSE_WAIT_TIMEOUT,
         "daily_budget": _budget_snapshot(),
         "sync_skip_backlog": SYNC_SKIP_BACKLOG,
+        # Live count so the chip stays current even between ticks
+        # (the per-tick ``reimport_queue`` only updates when
+        # _import_step actually runs).
+        "reimport_queue_size": _reimport_queue_size(),
         "index_from": get_pro_cutoff().isoformat(),
         # RAR extraction state — surfaces whether unrar is available
         # so the UI can warn the operator if HLTV's .rar demos are
@@ -417,6 +422,30 @@ def _bytes_downloaded_today() -> int:
         db.close()
 
 
+def _reimport_queue_size() -> int:
+    """Count of matches the scheduler will treat as re-import priority.
+
+    These are matches that already had ``import_bytes`` /
+    ``import_completed_at`` stamped (so we paid the budget at least
+    once) but currently have ``demo_id IS NULL`` — meaning the demo
+    was either purged for missing bytes, deleted manually, or never
+    successfully parsed.  Surfaced in scheduler_status so the /pro
+    chip can show the operator "X re-imports waiting" between ticks.
+    """
+    cutoff = pro_cutoff_naive()
+    db = SessionLocal()
+    try:
+        return (
+            db.query(ProMatch.id)
+            .filter(ProMatch.played_at >= cutoff)
+            .filter(ProMatch.demo_id == None)  # noqa: E711
+            .filter(ProMatch.import_completed_at.isnot(None))
+            .count()
+        )
+    finally:
+        db.close()
+
+
 def _import_backlog_size() -> int:
     """Count of matches that are eligible for auto-import but not yet
     imported. Same filters the import step applies, so this number is
@@ -613,16 +642,50 @@ async def _import_step() -> None:
         )
         if allowed_tiers:
             q = q.filter(ProMatch.tier.in_(allowed_tiers))
-        # Pull a generous pool so the tier-priority sort below has
-        # enough rows to actually CHOOSE from — order_by(played_at)
+
+        # ---- Two-bucket fetch: re-imports first, then fresh -----------
+        # A "re-import" is a match the operator explicitly asked us to
+        # try again — either via the purge-missing workflow (bytes gone
+        # from S3, the demo row was deleted and ProMatch.demo_id
+        # cleared) or a manual reset. The signal we use is:
+        #
+        #   demo_id IS NULL AND import_completed_at IS NOT NULL
+        #
+        # That means "we already downloaded this once, the budget is
+        # already spent on it, and the operator wants it back". These
+        # should always beat fresh candidates regardless of tier — if
+        # you downloaded a B-tier scrim yesterday and lost it, you
+        # probably still want it back before today's brand-new C-tier.
+        #
+        # We fetch them as a separate, unlimited query so a big batch
+        # of re-imports doesn't get squeezed out of a date-ordered
+        # pool of 50.  Typical re-import burst is 10-30 matches; even
+        # 200 wouldn't be expensive.
+        reimport_candidates: list[ProMatch] = (
+            q.filter(ProMatch.import_completed_at.isnot(None))
+            .order_by(ProMatch.played_at.desc().nullslast())
+            .all()
+        )
+
+        # Fresh candidates: never been downloaded. Big pool so the
+        # tier-priority sort has room to choose — order_by(played_at)
         # alone with LIMIT N would let recent C-tier scrims push out
         # yesterday's Major final because they're newer.
         pool_size = max(MAX_IMPORTS_PER_TICK * 10, 50)
-        candidates: list[ProMatch] = (
-            q.order_by(ProMatch.played_at.desc().nullslast())
+        fresh_candidates: list[ProMatch] = (
+            q.filter(ProMatch.import_completed_at.is_(None))
+            .order_by(ProMatch.played_at.desc().nullslast())
             .limit(pool_size)
             .all()
         )
+
+        candidates: list[ProMatch] = reimport_candidates + fresh_candidates
+
+        # Surface the re-import queue depth so the /pro chip can show
+        # "X re-imports priorizados" — gives the operator confidence
+        # that the matches they purged earlier are actually next in
+        # line, not stuck at the bottom of the candidate pool.
+        _state["reimport_queue"] = len(reimport_candidates)
         # Filter to actually-completed matches (BO total >= 2). This
         # avoids importing in-progress 1-0 matches that aren't done.
         candidates = [
@@ -630,22 +693,25 @@ async def _import_step() -> None:
             if (m.score_a or 0) + (m.score_b or 0) >= 2
         ]
 
-        # Tier-priority sort: S+ first, then S, A, B, C. Within a
-        # tier, newer matches win. This is the rule the user asked
-        # for — guarantees the budget gets spent on the most
-        # important matches available BEFORE any scrim from today
-        # squeezes them out.  Matches with NULL tier go last (only
-        # picked up if the allowed_tiers filter let them through,
-        # which by default it does not).
+        # Three-level priority sort:
+        #   1. Re-imports first (operator-requested retries beat
+        #      everything else regardless of tier).
+        #   2. Within each bucket, S+ → S → A → B → C → NULL.
+        #   3. Within each tier, newer matches win.
+        #
+        # The two-bucket fetch above guarantees the right candidates
+        # are present in ``candidates``; the sort below decides the
+        # actual order they get processed in this tick.
         def _candidate_priority(m: ProMatch) -> tuple:
+            is_reimport = (
+                m.import_completed_at is not None and m.demo_id is None
+            )
+            reimport_bucket = 0 if is_reimport else 1
             tier_p = _TIER_PRIORITY.get(m.tier, _TIER_PRIORITY[None])
-            # ``played_at`` may be None; treat None as the oldest
-            # possible date so it doesn't accidentally float to the
-            # top of an otherwise-tier-equal bucket.
             played_ts = (
                 -m.played_at.timestamp() if m.played_at else 0
             )
-            return (tier_p, played_ts)
+            return (reimport_bucket, tier_p, played_ts)
 
         candidates.sort(key=_candidate_priority)
         candidates = candidates[:MAX_IMPORTS_PER_TICK]

@@ -382,6 +382,12 @@ export const api = {
           exhausted: boolean;
           day_start_utc: string;
         };
+        /** Matches the operator queued for re-import (purged missing
+         *  bytes / scheduler reset / etc.). These jump to the FRONT
+         *  of the candidate order regardless of tier — they already
+         *  cost the budget once and the operator explicitly asked
+         *  for them back. */
+        reimport_queue_size: number;
       }>("/pro/scheduler/status"),
   },
 

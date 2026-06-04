@@ -376,6 +376,25 @@ export default function ProMatchesPage() {
                 </div>
               );
             })()}
+          {/* Re-import priority queue — matches the operator already
+              paid the budget for (purged + reimport / scheduler
+              reset / lost demos) that jump to the FRONT of the
+              candidate order on the next tick. Silent when empty. */}
+          {schedulerStatus?.reimport_queue_size != null &&
+            schedulerStatus.reimport_queue_size > 0 && (
+              <div
+                className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-primary/10 border border-primary/30 text-primary"
+                title="Estos matches saltan al frente de la cola de descarga en el próximo tick — antes que cualquier partido nuevo, sin importar el tier."
+              >
+                <RotateCcw size={11} />
+                <span>
+                  <span className="text-foreground">
+                    {schedulerStatus.reimport_queue_size}
+                  </span>{" "}
+                  re-imports priorizados
+                </span>
+              </div>
+            )}
           {schedulerStatus?.running && (
             <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-primary/10 border border-primary/30 text-primary">
               <span className="relative flex h-2 w-2">
