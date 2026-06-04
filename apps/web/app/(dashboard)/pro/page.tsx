@@ -7,6 +7,7 @@ import {
   ArrowRight,
   BarChart3,
   CheckCircle2,
+  ChevronDown,
   Download,
   ExternalLink,
   Globe,
@@ -614,35 +615,78 @@ function MatchActions({ match }: { match: ProMatch }) {
     mutationFn: () => api.pro.import(match.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
+  const [expanded, setExpanded] = useState(false);
 
-  // STATE: already imported → primary "Ver en 2D" button.
-  if (match.demoId) {
+  // STATE: at least one map has been imported. ``maps`` contains every
+  // Demo linked to this ProMatch — for a Bo1 there's one entry, for a
+  // Bo3 there are 2-3 entries (one per map played).
+  const maps = match.maps ?? [];
+  if (maps.length > 0) {
+    const seriesIsBo = maps.length > 1;
+    const primary = maps[0];
     return (
-      <div className="flex items-center gap-1.5">
-        <Link
-          href={`/demo/${match.demoId}/replay`}
-          className={cn(
-            "inline-flex items-center gap-1.5 text-xs font-semibold",
-            "px-3 py-1.5 rounded-md bg-primary text-primary-foreground",
-            "hover:bg-primary/90 transition-colors shadow-sm",
+      <div className="flex flex-col items-end gap-1.5">
+        <div className="flex items-center gap-1.5">
+          {/* Primary CTA — first map, big button. For a Bo1 this is the
+              only thing the user needs. For a series it's the "default"
+              jump; clicking the expander reveals the rest. */}
+          <Link
+            href={`/demo/${primary.demoId}/replay`}
+            className={cn(
+              "inline-flex items-center gap-1.5 text-xs font-semibold",
+              "px-3 py-1.5 rounded-md bg-primary text-primary-foreground",
+              "hover:bg-primary/90 transition-colors shadow-sm",
+            )}
+            title={primary.map ? `Mapa 1: ${primary.map}` : "Ver demo"}
+          >
+            <PlayCircle size={13} />
+            {seriesIsBo ? `Mapa 1${primary.map ? ` · ${primary.map}` : ""}` : "Ver en 2D"}
+            <ArrowRight size={11} />
+          </Link>
+          {!seriesIsBo && (
+            <Link
+              href={`/demo/${primary.demoId}`}
+              className={cn(
+                "inline-flex items-center gap-1 text-xs",
+                "px-2.5 py-1.5 rounded-md border border-border text-muted-foreground",
+                "hover:text-foreground hover:border-border-strong transition-colors",
+              )}
+              title="Estadísticas del partido"
+            >
+              <BarChart3 size={12} />
+              Stats
+            </Link>
           )}
-        >
-          <PlayCircle size={13} />
-          Ver en 2D
-          <ArrowRight size={11} />
-        </Link>
-        <Link
-          href={`/demo/${match.demoId}`}
-          className={cn(
-            "inline-flex items-center gap-1 text-xs",
-            "px-2.5 py-1.5 rounded-md border border-border text-muted-foreground",
-            "hover:text-foreground hover:border-border-strong transition-colors",
+          {seriesIsBo && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className={cn(
+                "inline-flex items-center gap-1 text-[11px] font-semibold",
+                "px-2.5 py-1.5 rounded-md border transition-colors",
+                expanded
+                  ? "bg-surface-elevated text-foreground border-border"
+                  : "border-border text-muted-foreground hover:text-foreground hover:border-border-strong",
+              )}
+              title={`${maps.length} mapas en este partido`}
+            >
+              <ChevronDown
+                size={12}
+                className={cn(
+                  "transition-transform",
+                  expanded && "rotate-180",
+                )}
+              />
+              {maps.length} mapas
+            </button>
           )}
-          title="Estadísticas del partido"
-        >
-          <BarChart3 size={12} />
-          Stats
-        </Link>
+        </div>
+        {seriesIsBo && expanded && (
+          <div className="flex flex-col items-end gap-1 mt-1 w-full max-w-xs">
+            {maps.map((m, idx) => (
+              <SeriesMapRow key={m.demoId} index={idx} demoMap={m} />
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -733,6 +777,82 @@ function MatchActions({ match }: { match: ProMatch }) {
     <span className="text-[10px] font-mono-rs text-muted-foreground/60 uppercase">
       sin demo
     </span>
+  );
+}
+
+// ============================================================
+// Bo3 series — one row per map shown when the user expands the card
+// ============================================================
+function SeriesMapRow({
+  index,
+  demoMap,
+}: {
+  index: number;
+  demoMap: NonNullable<ProMatch["maps"]>[number];
+}) {
+  // Pretty status label — same vocabulary as DemoCard so the user sees
+  // a consistent state across the app.
+  const isParsing =
+    demoMap.status === "uploaded" ||
+    demoMap.status === "queued" ||
+    demoMap.status === "processing";
+  const isFailed = demoMap.status === "failed";
+  const isReady = demoMap.status === "completed";
+
+  return (
+    <div
+      className={cn(
+        "w-full flex items-center justify-between gap-2 px-2 py-1 rounded-md",
+        "bg-surface-elevated/40 border border-border/40 text-[11px]",
+      )}
+    >
+      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+        <span className="text-muted-foreground/70 font-mono-rs text-[10px]">
+          M{index + 1}
+        </span>
+        <span className="text-foreground/90 font-medium truncate">
+          {demoMap.map || "—"}
+        </span>
+        {demoMap.scoreA != null && demoMap.scoreB != null && (
+          <span className="text-muted-foreground/70 font-mono-rs">
+            {demoMap.scoreA}:{demoMap.scoreB}
+          </span>
+        )}
+      </div>
+      {isReady && (
+        <div className="flex items-center gap-1">
+          <Link
+            href={`/demo/${demoMap.demoId}/replay`}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors font-semibold"
+          >
+            <PlayCircle size={10} />
+            Ver
+          </Link>
+          <Link
+            href={`/demo/${demoMap.demoId}`}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-muted-foreground hover:text-foreground transition-colors"
+            title="Estadísticas del mapa"
+          >
+            <BarChart3 size={10} />
+          </Link>
+        </div>
+      )}
+      {isParsing && (
+        <div className="flex items-center gap-1 text-accent">
+          <Loader2 size={10} className="animate-spin" />
+          <span>{demoMap.processingProgress}%</span>
+        </div>
+      )}
+      {isFailed && (
+        <span
+          className="text-loss flex items-center gap-1"
+          title={demoMap.errorMessage ?? undefined}
+        >
+          <AlertCircle size={10} />
+          Falló
+        </span>
+      )}
+    </div>
   );
 }
 

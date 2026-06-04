@@ -127,6 +127,9 @@ def _ensure_steam_columns() -> None:
             "team_b_name": "VARCHAR",
             "score_a": "INTEGER",
             "score_b": "INTEGER",
+            # Bo3 series linkage — multiple Demo rows can share one
+            # ProMatch when HLTV ships the series as one archive.
+            "pro_match_id": "INTEGER",
         }
         with engine.begin() as conn:
             for col_name, col_type in new_demo_cols.items():
@@ -141,11 +144,73 @@ def _ensure_steam_columns() -> None:
                 logger.info("migrated demo_players table: added clan_name")
 
 
+def _backfill_pro_match_demo_links() -> None:
+    """Wire up Demo rows that belong to a ProMatch series but lost the link.
+
+    Before the ``Demo.pro_match_id`` column existed, ``_persist_demo_bytes``
+    in pro_import.py only stamped ``ProMatch.demo_id`` with the FIRST
+    extracted .dem from a Bo3 archive. The other 1-2 maps of the series
+    were saved as orphan Demo rows — visible in /demos but not linked
+    back to the ProMatch they came from, so /pro showed a single map per
+    series instead of the full Bo3.
+
+    The filename ``_persist_demo_bytes`` writes is always
+    ``{teamA}-vs-{teamB}-{pro_match.id}-{member_stem}.dem``, so we can
+    recover the link by parsing the embedded ``-{id}-`` segment. This
+    runs ONCE per boot, only touches Demos that don't have a link yet,
+    and is no-op once the new code path has been writing the FK directly.
+    """
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    if "demos" not in insp.get_table_names() or "pro_matches" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("demos")}
+    if "pro_match_id" not in existing:
+        return
+    # Pull every Demo without a series link.  We match its filename
+    # against the set of known ProMatch ids — anything that contains
+    # ``-{id}-`` (or ends in ``-{id}.dem``) gets linked.
+    import re
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT id, filename FROM demos "
+                "WHERE pro_match_id IS NULL AND filename IS NOT NULL"
+            )
+        ).fetchall()
+        if not rows:
+            return
+        match_ids = {
+            r[0] for r in conn.execute(text("SELECT id FROM pro_matches")).fetchall()
+        }
+        if not match_ids:
+            return
+        pattern = re.compile(r"-(\d+)(?:-[^/]*)?\.dem$", re.IGNORECASE)
+        linked = 0
+        for demo_id, filename in rows:
+            m = pattern.search(filename or "")
+            if not m:
+                continue
+            candidate = int(m.group(1))
+            if candidate not in match_ids:
+                continue
+            conn.execute(
+                text("UPDATE demos SET pro_match_id = :pm WHERE id = :id"),
+                {"pm": candidate, "id": demo_id},
+            )
+            linked += 1
+        if linked:
+            logger.info(
+                "backfilled %d Demo->ProMatch links from filenames", linked,
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     _ensure_steam_columns()
     Base.metadata.create_all(bind=engine)
+    _backfill_pro_match_demo_links()
     logger.info(
         "RIFTSCOPE API ready (env=%s, db=%s, parser=%s, storage=%s, queue=%s)",
         settings.environment,

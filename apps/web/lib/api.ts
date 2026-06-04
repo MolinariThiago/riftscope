@@ -224,6 +224,20 @@ export const api = {
            *  "importing" = downloading, "failed" = see importError. */
           importStatus: "importing" | "failed" | null;
           importError: string | null;
+          /** Every Demo linked to this ProMatch (Bo3 series → 2-3 entries,
+           *  Bo1 → 1 entry, empty if not imported yet). Backend joins on
+           *  Demo.pro_match_id and serialises a slim per-map payload. */
+          maps: Array<{
+            demoId: number;
+            map: string | null;
+            filename: string;
+            status: "uploaded" | "queued" | "processing" | "completed" | "failed";
+            processingProgress: number;
+            scoreA: number | null;
+            scoreB: number | null;
+            durationSeconds: number | null;
+            errorMessage: string | null;
+          }>;
         }>;
       }>(`/pro/matches?limit=${limit}`),
     sync: () =>

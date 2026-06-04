@@ -628,6 +628,9 @@ def _persist_demo_bytes(
         storage_filename=storage_filename,
         status="queued",
         processing_progress=0,
+        # Series link: every map of a Bo3/Bo5 archive shares this FK so
+        # /pro can group them under the same ProMatch card.
+        pro_match_id=pro_match.id,
     )
     db.add(demo)
     db.commit()

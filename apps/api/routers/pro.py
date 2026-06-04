@@ -65,7 +65,12 @@ async def list_pro_matches(
     """Paginated pro-match feed. Returns matches whose ``played_at`` is on
     or after :func:`get_pro_cutoff`, PLUS every manual upload regardless
     of date — manual uploads are intentional curation by the operator,
-    so they shouldn't get hidden by the auto-scrape cutoff."""
+    so they shouldn't get hidden by the auto-scrape cutoff.
+
+    Each match's response carries a ``maps`` array with every Demo
+    linked to that ProMatch (via Demo.pro_match_id). For a Bo3 series
+    that's 2-3 entries (one per map); for a Bo1 it's a single entry.
+    """
     from sqlalchemy import or_
     cutoff = pro_cutoff_naive()
     rows = (
@@ -78,10 +83,46 @@ async def list_pro_matches(
         .limit(limit)
         .all()
     )
+    # Eager-load every Demo that's linked to one of these matches in a
+    # single query, then bucket them by pro_match_id. Avoids the N+1 we'd
+    # get from triggering a relationship lazy-load per match.
+    match_ids = [r.id for r in rows]
+    demos_by_match: dict[int, list[Demo]] = {}
+    if match_ids:
+        demos = (
+            db.query(Demo)
+            .filter(Demo.pro_match_id.in_(match_ids))
+            .order_by(Demo.id.asc())
+            .all()
+        )
+        for d in demos:
+            demos_by_match.setdefault(d.pro_match_id, []).append(d)
+
+    def _serialise_map(d: Demo) -> dict:
+        # Slim per-map payload — the /pro card only needs enough to render
+        # the row, link to the replay viewer, and reflect parse state.
+        return {
+            "demoId": d.id,
+            "map": d.map_name,
+            "filename": d.filename,
+            "status": d.status,
+            "processingProgress": d.processing_progress,
+            "scoreA": d.score_a,
+            "scoreB": d.score_b,
+            "durationSeconds": d.duration_seconds,
+            "errorMessage": d.error_message,
+        }
+
+    payload: list[dict] = []
+    for r in rows:
+        match_dict = r.to_dict()
+        match_dict["maps"] = [_serialise_map(d) for d in demos_by_match.get(r.id, [])]
+        payload.append(match_dict)
+
     return {
         "total": len(rows),
         "indexFrom": get_pro_cutoff().isoformat(),
-        "matches": [r.to_dict() for r in rows],
+        "matches": payload,
     }
 
 

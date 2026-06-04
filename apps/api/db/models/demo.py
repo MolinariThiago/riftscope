@@ -79,6 +79,18 @@ class Demo(Base):
         String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
+    # Series linkage — when a pro_match comes from HLTV as a Bo3/Bo5, the
+    # downloaded archive contains 2-3 .dem files (one per map). They all
+    # share the same ``pro_match_id`` and the /pro page renders them as a
+    # series. Null for solo uploads and demos that aren't tied to a pro
+    # match (legacy / anonymous / user uploads).
+    pro_match_id = Column(
+        Integer,
+        ForeignKey("pro_matches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Relationships — cascade so deleting a demo wipes its rows.
     user = relationship("User", back_populates="demos")
     players = relationship(
