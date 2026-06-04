@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { LandingNav } from "@/components/landing/LandingNav";
+import { useAuthStore } from "@/lib/stores/auth";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,23 @@ const SECTIONS: Section[] = [
 
 export default function DocsPage() {
   const active = useActiveSection(SECTIONS.map((s) => s.slug));
+
+  // Auth-aware CTA target. The dashboard guards /pro at the layout
+  // level — visiting it logged out bounces the user to /login and
+  // then to /pro on success, so the session is never bypassed. But
+  // that two-hop redirect feels like a bug to a first-time reader,
+  // so we resolve the link client-side: signed-in users go to /pro,
+  // everyone else goes to /login (which Steam-OpenIDs them straight
+  // into the dashboard).
+  const user = useAuthStore((s) => s.user);
+  const fetchMe = useAuthStore((s) => s.fetchMe);
+  useEffect(() => {
+    // Cheap: re-uses the auth cookie. No-op on subsequent calls
+    // once the store is hydrated.
+    void fetchMe();
+  }, [fetchMe]);
+  const tailHref = user ? "/pro" : "/login";
+  const tailLabel = user ? "Jump to /pro" : "Sign in to start";
 
   return (
     <div className="relative min-h-screen">
@@ -134,10 +152,10 @@ export default function DocsPage() {
             ← Back to overview
           </Link>
           <Link
-            href="/pro"
+            href={tailHref}
             className="inline-flex items-center gap-1.5 text-primary hover:underline"
           >
-            Jump to /pro
+            {tailLabel}
             <ArrowRight size={12} />
           </Link>
         </div>
