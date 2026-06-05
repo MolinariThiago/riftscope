@@ -211,6 +211,45 @@ class RealDemoParser:
                 "team": _TEAM_NUM_TO_SIDE.get(team_num, "ct"),
             }
 
+        # Fallback: some demos (truncated downloads, demos captured
+        # mid-warmup, certain HLTV-hosted bundles) make
+        # ``parse_player_info()`` return a snapshot where every
+        # player still has team_number=0 (unassigned). The strict
+        # filter then empties players_meta and the radar renders
+        # with no player markers at all — exactly the symptom in
+        # the user's first screenshot.
+        #
+        # When we see an empty players_meta but the player_info
+        # frame DID return rows, relax to: include every non-
+        # spectator (team_number != 1). Players still get
+        # team-assigned via per-tick ``team_num`` later, so the
+        # downstream code stays correct; this just stops the
+        # filter from silently dropping the whole roster.
+        if not players_meta and player_info is not None and len(player_info) > 0:
+            logger.warning(
+                "parse_player_info returned %d rows but strict team_number "
+                "filter (2/3) emptied players_meta — falling back to "
+                "non-spectator filter (team_number != 1).",
+                len(player_info),
+            )
+            for _, row in player_info.iterrows():
+                sid = str(row["steamid"])
+                team_num = _safe_int(row.get("team_number"))
+                # Skip true spectators (1) and missing-id rows.
+                if team_num == 1 or not sid:
+                    continue
+                players_meta[sid] = {
+                    "steamId": sid,
+                    "name": str(row["name"]),
+                    # Default to CT — per-tick team mapping later
+                    # corrects this for events that carry team info.
+                    "team": _TEAM_NUM_TO_SIDE.get(team_num, "ct"),
+                }
+            logger.info(
+                "fallback recovered %d players from non-spectator filter",
+                len(players_meta),
+            )
+
         # ---- Rounds ----------------------------------------------------------
         round_ends = _safe_event(parser, "round_end")
         # CS2 fires a round_end at tick ≈0 for warmup/restart. Drop rounds with
@@ -247,6 +286,25 @@ class RealDemoParser:
         # warmup, knife round, and OT restarts which inflated the final
         # score (e.g. a 13-8 game showing up as 16-8).
         rounds = self._trim_to_match_window(rounds)
+
+        # Sanity warning: a real CS2 match is at minimum ~13 rounds
+        # (MR12 13-0 sweep). When we land with fewer than 8 rounds,
+        # either the demo file is truncated (HLTV sometimes serves
+        # an incomplete .rar) or our round-pairing is missing
+        # something. Surface it so the operator can decide whether
+        # to re-import. Doesn't change behaviour — diagnostic only.
+        if 0 < len(rounds) < 8:
+            try:
+                _starts = len(round_starts) if round_starts is not None else 0
+                _ends = len(round_ends) if round_ends is not None else 0
+            except Exception:
+                _starts = _ends = -1
+            logger.warning(
+                "demo parsed with only %d rounds (raw freeze_end events: %d, "
+                "round_end events: %d) — demo may be truncated or have "
+                "malformed round events.",
+                len(rounds), _starts, _ends,
+            )
 
         # ---- Kills -----------------------------------------------------------
         deaths_df = _safe_event(parser, "player_death")

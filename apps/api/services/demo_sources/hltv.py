@@ -221,6 +221,20 @@ class HltvSource:
         r'class="[^"]*\bscore-(?:won|lost|tied)\b[^"]*"[^>]*>\s*(\d+)\s*<',
         re.IGNORECASE,
     )
+    # The result-score CONTAINER. On a Bo3, HLTV renders both the
+    # SERIES score (2:0) AND the per-map scores (16-9, 16-14) on the
+    # same row, in different elements. The plain ``_RE_SCORE`` regex
+    # grabs the first two ``score-won/lost`` numbers it sees, which
+    # on some layouts is the per-map score (wrong — gives weird
+    # numbers like "14:5" for a finished Bo3 series). When this
+    # container regex matches, we restrict the score search to its
+    # body so we get the series score every time. When it doesn't
+    # match (older layouts, Bo1s without the wrapper), we fall back
+    # to scanning the whole row — preserving the previous behaviour.
+    _RE_SCORE_BLOCK = re.compile(
+        r'class="[^"]*\bresult-score\b[^"]*"[^>]*>(.*?)</(?:td|div|span)>',
+        re.IGNORECASE | re.DOTALL,
+    )
     _RE_EVENT = re.compile(
         r'class="[^"]*\bevent-name\b[^"]*"[^>]*>([^<]+)<',
         re.IGNORECASE,
@@ -317,9 +331,30 @@ class HltvSource:
                 continue
             team_a, team_b = uniq[0], uniq[1]
 
-            scores = self._RE_SCORE.findall(window)
+            # Constrain score search to the result-score container
+            # when HLTV ships one (avoids picking up per-map scores on
+            # Bo3 rows). Fall back to the full window when the
+            # container regex doesn't match — preserves behaviour for
+            # older row layouts.
+            score_block_match = self._RE_SCORE_BLOCK.search(window)
+            score_scope = (
+                score_block_match.group(1) if score_block_match else window
+            )
+            scores = self._RE_SCORE.findall(score_scope)
             score_a = int(scores[0]) if len(scores) >= 1 else None
             score_b = int(scores[1]) if len(scores) >= 2 else None
+            # Sanity log: a finished CS2 map should hit max 19 (OT
+            # ceiling). Anything higher is almost certainly a wrong
+            # capture — surface it so the operator can spot affected
+            # matches without having to read raw HTML.
+            if (score_a is not None and score_a > 19) or (
+                score_b is not None and score_b > 19
+            ):
+                logger.warning(
+                    "HLTV scrape captured suspicious score %s:%s for match %s "
+                    "(teams: %s vs %s) — review the row HTML",
+                    score_a, score_b, hltv_id, team_a, team_b,
+                )
 
             event_match = self._RE_EVENT.search(window)
             event_name = _clean(event_match.group(1)) if event_match else None
