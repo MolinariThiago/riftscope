@@ -559,3 +559,184 @@ def admin_reset_stuck_demos(
         "matchesReset": matches_reset,
         "cutoff": cutoff.isoformat(),
     }
+
+
+@router.post("/pro/purge-low-tier")
+def admin_purge_low_tier(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Delete every ProMatch with tier B, C, or NULL — plus their demos.
+
+    One-shot cleanup for the noise the old auto-importer left behind
+    when ``PRO_AUTO_TIERS`` was set to S+/S/A/B/C. The new default is
+    S+/S/A only, so existing B/C/null rows can be removed wholesale.
+    Demos linked to those ProMatches go too — they were imported
+    against the operator's current preference and aren't going to be
+    re-watched.
+
+    Returns the count of ProMatches deleted, the count of Demos
+    deleted, and the tier breakdown so the operator can confirm what
+    just happened.
+    """
+    from db.models.pro_match import ProMatch
+    from sqlalchemy import or_
+
+    candidates: list[ProMatch] = (
+        db.query(ProMatch)
+        .filter(or_(
+            ProMatch.tier.in_(("B", "C")),
+            ProMatch.tier.is_(None),
+        ))
+        .all()
+    )
+    if not candidates:
+        return {"deletedMatches": 0, "deletedDemos": 0, "byTier": {}}
+
+    by_tier: dict[str, int] = {}
+    match_ids = []
+    for m in candidates:
+        key = m.tier or "(null)"
+        by_tier[key] = by_tier.get(key, 0) + 1
+        match_ids.append(m.id)
+
+    # Find every demo linked to those matches via pro_match_id, plus
+    # the legacy demo_id pointer on the ProMatch row itself. Both
+    # collections feed the same delete pass — cascading delete-orphans
+    # on Demo will wipe DemoPlayer / DemoRound / DemoKill children.
+    demo_ids_to_delete: set[int] = set()
+    if match_ids:
+        for d_id, in (
+            db.query(Demo.id)
+            .filter(Demo.pro_match_id.in_(match_ids))
+            .all()
+        ):
+            demo_ids_to_delete.add(int(d_id))
+    for m in candidates:
+        if m.demo_id is not None:
+            demo_ids_to_delete.add(int(m.demo_id))
+
+    deleted_demos = 0
+    if demo_ids_to_delete:
+        for did in demo_ids_to_delete:
+            d = db.query(Demo).filter(Demo.id == did).first()
+            if d is not None:
+                db.delete(d)
+                deleted_demos += 1
+
+    for m in candidates:
+        db.delete(m)
+
+    db.commit()
+    return {
+        "deletedMatches": len(candidates),
+        "deletedDemos": deleted_demos,
+        "byTier": by_tier,
+    }
+
+
+@router.post("/demos/reparse-pro")
+def admin_reparse_pro_demos(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Re-queue completed pro demos for parsing with the current parser.
+
+    The parser has changed substantially over the last few weeks
+    (real ADR/KAST/utility extraction, quality gate, subprocess
+    isolation). Demos parsed before those changes may have broken
+    stats or, with the new quality gate, may be exposed as malformed
+    in the first place. This endpoint flips ``status`` back to
+    ``queued`` on completed Demos linked to a ProMatch and schedules
+    them again. Newest-first so the most visible rows refresh
+    quickest.
+
+    Limited to ``limit`` (default 20, max 100) per call so the
+    worker isn't flooded with a few hundred subprocess parses at
+    once.  Re-runs are serialised inside an asyncio runner: each
+    parse must complete (success or failure) before the next one
+    starts, keeping the 512 MB Hobby budget safe.
+
+    Returns the count scheduled + the demo IDs.
+    """
+    import asyncio
+    from core.bg import spawn
+    from db.database import SessionLocal as _SL
+    from services.storage import get_storage
+    from workers.demo_worker import schedule_demo_processing
+
+    storage = get_storage()
+    bucket = getattr(storage, "bucket", None)
+
+    candidates: list[Demo] = (
+        db.query(Demo)
+        .filter(Demo.status == "completed")
+        .filter(Demo.pro_match_id.isnot(None))
+        .order_by(Demo.processed_at.desc().nullslast(), Demo.id.desc())
+        .limit(max(1, min(100, limit)))
+        .all()
+    )
+
+    queued: list[tuple[int, str]] = []
+    skipped = 0
+
+    for demo in candidates:
+        if not demo.storage_filename:
+            skipped += 1
+            continue
+        # Resolve abs_path — same logic the retry endpoint uses.
+        if bucket:
+            abs_path = f"s3://{bucket}/{demo.storage_filename}"
+        else:
+            try:
+                local = storage.get_path(demo.storage_filename)
+                if not local.exists():
+                    skipped += 1
+                    continue
+                abs_path = str(local)
+            except Exception:  # pragma: no cover — defensive
+                skipped += 1
+                continue
+
+        demo.status = "queued"
+        demo.processing_progress = 0
+        demo.error_message = None
+        demo.processed_at = None
+        queued.append((demo.id, abs_path))
+
+    db.commit()
+
+    # Background runner — serialises the parses so we don't kick off
+    # 20 subprocesses simultaneously and OOM-kill the worker. Each
+    # parse must reach a terminal status before the next one starts.
+    async def _runner() -> None:
+        for demo_id, abs_path in queued:
+            try:
+                schedule_demo_processing(demo_id, abs_path)
+            except Exception:  # pragma: no cover — defensive
+                logger.exception(
+                    "reparse runner: schedule failed for demo %s", demo_id,
+                )
+                continue
+            # Poll until terminal. 15-second cadence is enough; parses
+            # take 2-10 minutes.
+            while True:
+                await asyncio.sleep(15)
+                db2 = _SL()
+                try:
+                    d = db2.query(Demo).filter(Demo.id == demo_id).first()
+                    if d is None:
+                        break
+                    if d.status in ("completed", "failed"):
+                        break
+                finally:
+                    db2.close()
+
+    spawn(_runner(), name="admin-reparse-pro")
+
+    return {
+        "scheduled": len(queued),
+        "skipped": skipped,
+        "demoIds": [did for did, _ in queued],
+    }

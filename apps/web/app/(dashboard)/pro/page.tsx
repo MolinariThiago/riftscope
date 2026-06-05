@@ -109,6 +109,25 @@ export default function ProMatchesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
 
+  // One-shot cleanup: delete every B/C/null tier match from the DB.
+  // Confirmation prompt because this is destructive — once gone, the
+  // matches can be re-synced from HLTV but their parsed analyses
+  // (DemoPlayer/DemoRound/DemoKill rows) are wiped permanently.
+  const purgeLowTier = useMutation({
+    mutationFn: () => api.admin.purgeLowTierMatches(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
+  });
+
+  // Re-parse the most recent N completed pro demos with the current
+  // parser. Useful when parser changes (real ADR/KAST, quality gate,
+  // etc.) need to be applied to demos that were already saved.  The
+  // backend serialises the parses internally so we won't OOM-storm
+  // the worker.
+  const reparsePro = useMutation({
+    mutationFn: () => api.admin.reparseProDemos(20),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
+  });
+
   const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false);
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -290,6 +309,51 @@ export default function ProMatchesPage() {
                 <RefreshCcw size={13} />
               )}
               Reintentar fallidas
+            </button>
+            <button
+              onClick={() => reparsePro.mutate()}
+              disabled={reparsePro.isPending}
+              title="Vuelve a parsear las últimas 20 demos pro completadas con el parser actual (real ADR/KAST, quality gate, etc)"
+              className={cn(
+                "inline-flex items-center gap-2 px-3 py-2.5 rounded-lg",
+                "bg-surface-elevated text-foreground/80 text-xs font-semibold border border-border",
+                "hover:bg-surface hover:text-foreground hover:border-border-strong",
+                "disabled:opacity-50 transition-colors whitespace-nowrap",
+              )}
+            >
+              {reparsePro.isPending ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <RefreshCcw size={13} />
+              )}
+              Re-parsear pro
+            </button>
+            <button
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "Borrar todas las partidas B/C/sin clasificar y sus demos parseadas? Esta acción no se puede deshacer.",
+                  )
+                ) {
+                  return;
+                }
+                purgeLowTier.mutate();
+              }}
+              disabled={purgeLowTier.isPending}
+              title="Borra TODAS las ProMatches con tier B, C o sin clasificar. Las demos linkeadas también se borran. Destructivo."
+              className={cn(
+                "inline-flex items-center gap-2 px-3 py-2.5 rounded-lg",
+                "bg-loss/10 text-loss text-xs font-semibold border border-loss/30",
+                "hover:bg-loss/15 hover:border-loss/50",
+                "disabled:opacity-50 transition-colors whitespace-nowrap",
+              )}
+            >
+              {purgeLowTier.isPending ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <AlertCircle size={13} />
+              )}
+              Purgar B/C
             </button>
             <button
               onClick={() => sync.mutate()}
@@ -548,6 +612,62 @@ export default function ProMatchesPage() {
             <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-loss/10 border border-loss/30 text-loss">
               <AlertCircle size={11} />
               <span>Retry falló · ver logs</span>
+            </div>
+          )}
+          {/* Re-parse pro result. */}
+          {reparsePro.data && (
+            <div
+              className={cn(
+                "inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md",
+                reparsePro.data.scheduled > 0
+                  ? "bg-primary/10 border border-primary/30 text-primary"
+                  : "bg-surface-elevated border border-border text-muted-foreground",
+              )}
+            >
+              <RefreshCcw size={11} />
+              {reparsePro.data.scheduled > 0 ? (
+                <span>
+                  Re-parseando{" "}
+                  <span className="text-foreground">{reparsePro.data.scheduled}</span>{" "}
+                  demos · seriadas en background
+                  {reparsePro.data.skipped > 0 && (
+                    <> · {reparsePro.data.skipped} sin archivo</>
+                  )}
+                </span>
+              ) : (
+                <span>Nada para re-parsear</span>
+              )}
+            </div>
+          )}
+          {/* Purge low-tier result. */}
+          {purgeLowTier.data && (
+            <div
+              className={cn(
+                "inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md",
+                purgeLowTier.data.deletedMatches > 0
+                  ? "bg-win/10 border border-win/30 text-win"
+                  : "bg-surface-elevated border border-border text-muted-foreground",
+              )}
+              title={
+                Object.keys(purgeLowTier.data.byTier).length > 0
+                  ? Object.entries(purgeLowTier.data.byTier)
+                      .map(([k, v]) => `${k}: ${v}`)
+                      .join(" · ")
+                  : undefined
+              }
+            >
+              <CheckCircle2 size={11} />
+              {purgeLowTier.data.deletedMatches > 0 ? (
+                <span>
+                  Borradas{" "}
+                  <span className="text-foreground">
+                    {purgeLowTier.data.deletedMatches}
+                  </span>{" "}
+                  partidas B/C · {purgeLowTier.data.deletedDemos} demos eliminadas
+                </span>
+              ) : (
+                <span>No había partidas B/C para borrar</span>
+              )}
             </div>
           )}
           {sync.data && (

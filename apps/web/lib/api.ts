@@ -582,6 +582,26 @@ export const api = {
         matchesCleared: number;
         demoIds: number[];
       }>(`/admin/demos/purge-missing`, { method: "POST" }),
+    /** One-shot: delete every ProMatch with tier B / C / null plus
+     *  their linked demos. Used after tightening PRO_AUTO_TIERS to
+     *  S+/S/A to clear out the old noise. */
+    purgeLowTierMatches: () =>
+      request<{
+        deletedMatches: number;
+        deletedDemos: number;
+        byTier: Record<string, number>;
+      }>(`/admin/pro/purge-low-tier`, { method: "POST" }),
+    /** Re-queue completed pro demos for parsing with the current
+     *  parser. Useful after parser changes so old saved analyses
+     *  get refreshed. ``limit`` defaults to 20, max 100. The
+     *  endpoint serialises parses internally so it's safe to fire
+     *  even when the worker has a tight memory budget. */
+    reparseProDemos: (limit = 20) =>
+      request<{
+        scheduled: number;
+        skipped: number;
+        demoIds: number[];
+      }>(`/admin/demos/reparse-pro?limit=${limit}`, { method: "POST" }),
     /** Admin queue for the bottom-right feedback widget. */
     feedback: {
       list: (status?: FeedbackStatus, limit = 200) =>

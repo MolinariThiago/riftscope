@@ -250,6 +250,13 @@ class RealDemoParser:
                 len(players_meta),
             )
 
+        # Diagnostic: this number is the second thing the operator
+        # checks when a parse fails the quality gate ("only N players
+        # detected"). Less than 10 here means either ``parse_player_info``
+        # came back short or the spectator filter consumed too many
+        # rows.  10 is the expected baseline (5v5).
+        logger.info("players_meta finalised: %d players", len(players_meta))
+
         # ---- Rounds ----------------------------------------------------------
         round_ends = _safe_event(parser, "round_end")
         # CS2 fires a round_end at tick ≈0 for warmup/restart. Drop rounds with
@@ -847,7 +854,27 @@ class RealDemoParser:
         for r in rounds:
             r.pop("_winner_team_num", None)
 
-        logger.info("real parse complete: %s, %d rounds, %d kills", map_name, len(rounds), len(kills))
+        logger.info(
+            "real parse complete: %s, %d rounds, %d kills, %d players, score=%s:%s",
+            map_name, len(rounds), len(kills), len(players), score_a, score_b,
+        )
+
+        # ---- Quality gate ---------------------------------------------------
+        # CS2 matches need at least 13 rounds (MR12 — first to 13 wins) and
+        # exactly 10 playable players. Demos that come back with less are
+        # almost always malformed: cut short, missing chunks, or a half
+        # downloaded .rar. Marking them ``completed`` was producing the
+        # "no players" / "only 2 rounds" cards the user kept reporting.
+        # Raise instead so the subprocess wrapper marks them ``failed``
+        # with a clear error message — much better signal than a broken
+        # success state.
+        _validate_parse_quality(
+            map_name=map_name,
+            rounds=len(rounds),
+            players=len(players),
+            score_a=score_a,
+            score_b=score_b,
+        )
 
         return {
             "meta": meta,
@@ -1011,6 +1038,16 @@ class RealDemoParser:
         # 3. Renumber 1..N in tick order — ignores any source numbering.
         for i, r in enumerate(raw, start=1):
             r["number"] = i
+        # Diagnostic: when the parse later fails the quality gate, this
+        # number is the first thing to check.  A demo with 4 rounds
+        # detected here will fail with "only 4 rounds detected" — and
+        # the operator can correlate that against this log line to
+        # see if it was a parser failure (low ``raw`` count) or a
+        # trim failure (high ``raw`` count, low final count).
+        logger.info(
+            "rounds detected (pre-trim): %d freeze_end starts, %d round_end events, %d paired",
+            len(starts_ticks), len(ends), len(raw),
+        )
         return raw
 
     @staticmethod
@@ -3023,3 +3060,71 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
     if math.isnan(f) or math.isinf(f):
         return default
     return f
+
+
+
+# ===========================================================================
+# Quality gate — raised when the parse output fails sanity checks.
+# Caught by the subprocess wrapper, which marks the Demo failed with the
+# explanation as its error_message instead of persisting broken data.
+# ===========================================================================
+class ParseQualityError(ValueError):
+    """The parser produced output that fails minimum-sanity checks.
+
+    Distinct from a parser crash — the parse ran to completion but the
+    result is clearly malformed (too few rounds, too few players, no
+    score). We surface it as a specific exception so the wrapper can
+    set a clear error_message instead of dumping a stack trace.
+    """
+
+
+# Minimum legitimate CS2 match. MR12 means first to 13 wins; even an
+# instant 13-0 stomp produces 13 rounds. Anything below this is a
+# truncated demo, a half-downloaded .rar, or a parser failure
+# pretending to be a success.
+_MIN_VALID_ROUNDS = 13
+# A CS2 match always has exactly 10 playable players (5v5). Less than
+# 10 means we missed someone — usually the team_clan_name extraction
+# failed on a coach/spectator and they leaked into the playable set,
+# pushing real players out.
+_MIN_VALID_PLAYERS = 10
+
+
+def _validate_parse_quality(
+    *,
+    map_name: str | None,
+    rounds: int,
+    players: int,
+    score_a: int | None,
+    score_b: int | None,
+) -> None:
+    """Raise ``ParseQualityError`` when the parsed result is obviously broken.
+
+    Called at the very end of ``parse()`` before returning. The checks
+    are conservative on purpose — we would rather mark a real match
+    failed (operator can reprocess) than persist a broken one that
+    quietly hits the public feed.
+    """
+    issues: list[str] = []
+    if rounds < _MIN_VALID_ROUNDS:
+        issues.append(
+            f"only {rounds} rounds detected (minimum {_MIN_VALID_ROUNDS})"
+        )
+    if players < _MIN_VALID_PLAYERS:
+        issues.append(
+            f"only {players} players detected (expected {_MIN_VALID_PLAYERS})"
+        )
+    if score_a is None or score_b is None:
+        issues.append("score could not be determined")
+    elif (score_a + score_b) < _MIN_VALID_ROUNDS:
+        issues.append(
+            f"final score sum {score_a}+{score_b} below minimum match length"
+        )
+    if issues:
+        raise ParseQualityError(
+            "Demo failed quality check"
+            + (f" ({map_name})" if map_name else "")
+            + ": "
+            + "; ".join(issues)
+        )
+
