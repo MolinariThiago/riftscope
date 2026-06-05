@@ -143,12 +143,15 @@ class Settings(BaseSettings):
     # only tries 3 IPs.
     hltv_proxy_max_retries: int = 3
     # Auto-import scheduler: only chase matches in these tier buckets.
-    # Tier-1/2 (S+/S/A/B) keep the proxy budget focused on demos people
-    # actually want; C and Unclassified are ignored unless an admin clicks
-    # "Import" manually. Comma-separated env: ``PRO_AUTO_TIERS=S+,S,A,B``.
-    # Same reason as ``hltv_proxy_urls`` for staying a plain string —
-    # pydantic-settings would otherwise demand JSON in the env value.
-    pro_auto_tiers: str = "S+,S,A,B"
+    # Default is the top three (S+/S/A == Majors, tier-1 finals, tier-1
+    # regionals == the 5★/4★/3★ HLTV importance bands). Tier-2 (B) and
+    # tier-3 (C) are excluded by default — they produce the most
+    # malformed / truncated demos and bloat the feed with matches
+    # nobody asked for. An admin can still import a B/C match manually.
+    # Comma-separated env: ``PRO_AUTO_TIERS=S+,S,A``. Same reason as
+    # ``hltv_proxy_urls`` for staying a plain string — pydantic-settings
+    # would otherwise demand JSON in the env value.
+    pro_auto_tiers: str = "S+,S,A"
     # How many HLTV imports may run at the same time. Webshare Static
     # Residential is one IP — keep this low so the proxy doesn't get rate-
     # limited and the parser doesn't fight itself for the CPU.

@@ -12,6 +12,7 @@ import {
   ExternalLink,
   RotateCcw,
   RefreshCcw,
+  Layers,
   Loader2,
   PlayCircle,
   Plus,
@@ -324,22 +325,29 @@ export default function ProMatchesPage() {
           />
         )}
 
-        {/* Counters strip — at-a-glance totals so the user immediately
-            knows the state of the library. */}
-        <div className="relative mt-5 grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+        {/* Counters strip. Admins get the full diagnostic
+            (watchable / importable / total); regular users see only
+            the count of matches they can actually open — anything
+            else is noise. */}
+        <div
+          className={cn(
+            "relative mt-5 grid gap-2 sm:gap-3",
+            isAdmin
+              ? "grid-cols-2 sm:grid-cols-3"
+              : "grid-cols-1 sm:max-w-xs",
+          )}
+        >
           <Counter
             label="LISTAS PARA 2D"
             value={watchableCount}
             highlight
           />
-          <Counter
-            label="IMPORTABLES"
-            value={importableCount}
-          />
-          <Counter
-            label="TOTAL"
-            value={pastMatches.length}
-          />
+          {isAdmin && (
+            <>
+              <Counter label="IMPORTABLES" value={importableCount} />
+              <Counter label="TOTAL" value={pastMatches.length} />
+            </>
+          )}
         </div>
 
         {/* Background-scheduler indicator + diagnostic chips. */}
@@ -808,7 +816,7 @@ function DateGroup({
         </span>
         <div className="flex-1 h-px bg-border/50" />
       </div>
-      <div className="glass-card rounded-xl divide-y divide-border/40 overflow-hidden">
+      <div className="space-y-2.5">
         {matches.map((m) => (
           <MatchRow key={m.id} match={m} />
         ))}
@@ -828,38 +836,90 @@ function MatchRow({ match }: { match: ProMatch }) {
     match.scoreB > match.scoreA;
   const watchable = match.demoId != null;
 
-  // Bo3 / Bo5 — when more than one map is linked, the row expands into a
-  // card showing the series header and a sub-row per map (cs2.cam style).
-  // The series header retains the time / event / teams / score; each
-  // map gets its own thumbnail, individual score and "Ver en 2D" button.
   const maps = match.maps ?? [];
   const isSeries = maps.length > 1;
+
+  // Tier chip + colour — drives both the left rail accent and the
+  // small badge in the header so the importance of the match reads
+  // at a glance instead of being buried in a tooltip.
+  const tier = match.tier;
+  const tierToneClass: Record<string, string> = {
+    "S+": "text-amber-400 border-amber-400/40 bg-amber-400/10",
+    "S":  "text-primary border-primary/40 bg-primary/10",
+    "A":  "text-accent border-accent/40 bg-accent/10",
+    "B":  "text-muted-foreground border-border bg-surface-elevated",
+    "C":  "text-muted-foreground border-border bg-surface-elevated",
+  };
+  const tierRailClass: Record<string, string> = {
+    "S+": "bg-amber-400",
+    "S":  "bg-primary",
+    "A":  "bg-accent",
+    "B":  "bg-border",
+    "C":  "bg-border",
+  };
 
   return (
     <div
       className={cn(
-        "transition-colors",
-        "hover:bg-surface-elevated/30",
-        watchable && "bg-primary/[0.03]",
-        isSeries && "border-b border-border/40 last:border-b-0",
+        "group relative rounded-xl overflow-hidden",
+        "border border-border/50 bg-surface-elevated/40",
+        "transition-all duration-200",
+        watchable
+          ? "hover:border-primary/40 hover:bg-surface-elevated/70 hover:shadow-[0_0_30px_-12px_hsl(var(--primary)/0.5)]"
+          : "hover:border-border-strong hover:bg-surface-elevated/60",
       )}
     >
-      {/* SERIES HEADER (same layout as the original single-row view) */}
-      <div className="px-4 py-3 flex items-center gap-4">
-        {/* Time + event — compact left column */}
-        <div className="hidden sm:flex flex-col gap-0.5 w-32 flex-shrink-0">
-          <div className="text-[11px] font-mono-rs text-muted-foreground">
-            {formatTime(match.playedAt)}
-          </div>
-          <div
-            className="text-[11px] text-muted-foreground/80 truncate"
-            title={match.event ?? undefined}
-          >
-            {match.event ?? "—"}
-          </div>
-        </div>
+      {/* Left tier rail — a thin coloured stripe that immediately
+          communicates "this is a Major / tier-1 / scrim" without
+          stealing real estate from the card content. */}
+      {tier && (
+        <div
+          className={cn(
+            "absolute left-0 top-0 bottom-0 w-[3px]",
+            tierRailClass[tier] ?? "bg-border",
+          )}
+        />
+      )}
 
-        {/* Teams + score — the centerpiece */}
+      {/* HEADER — meta strip with time / event / tier */}
+      <div className="px-4 pt-3 pb-2 flex items-center gap-2 flex-wrap text-[10px] font-mono-rs uppercase tracking-wider">
+        <span className="text-muted-foreground">
+          {formatTime(match.playedAt)}
+        </span>
+        {match.event && (
+          <>
+            <span className="text-muted-foreground/30">·</span>
+            <span
+              className="text-foreground/80 truncate max-w-[260px]"
+              title={match.event}
+            >
+              {match.event}
+            </span>
+          </>
+        )}
+        <div className="flex-1" />
+        {tier && (
+          <span
+            className={cn(
+              "inline-flex items-center px-1.5 py-0.5 rounded border font-bold",
+              tierToneClass[tier] ?? "text-muted-foreground border-border",
+            )}
+          >
+            {tier === "S+" && <Trophy size={9} className="mr-1" />}
+            {tier}
+          </span>
+        )}
+        {isSeries && (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface-elevated border border-border/60 text-muted-foreground">
+            <Layers size={9} />
+            BO{maps.length}
+          </span>
+        )}
+      </div>
+
+      {/* MAIN BODY — teams + score; the centrepiece. Bigger logos,
+          team-coloured score side, soft win-glow on the winning team. */}
+      <div className="px-4 pb-3 flex items-center gap-3">
         <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
           <TeamCell
             name={match.teamA}
@@ -868,12 +928,12 @@ function MatchRow({ match }: { match: ProMatch }) {
             losing={bWon}
             side="left"
           />
-          <div className="flex items-center gap-1.5 font-mono-rs text-lg font-bold px-2">
-            <span className={cn(aWon ? "text-primary" : "text-muted-foreground")}>
+          <div className="flex items-center gap-1 font-mono-rs text-2xl font-extrabold px-2 leading-none">
+            <span className={cn(aWon ? "text-foreground" : "text-muted-foreground/60")}>
               {match.scoreA ?? 0}
             </span>
-            <span className="text-muted-foreground/40 text-sm">:</span>
-            <span className={cn(bWon ? "text-primary" : "text-muted-foreground")}>
+            <span className="text-muted-foreground/30 text-base">:</span>
+            <span className={cn(bWon ? "text-foreground" : "text-muted-foreground/60")}>
               {match.scoreB ?? 0}
             </span>
           </div>
@@ -886,27 +946,28 @@ function MatchRow({ match }: { match: ProMatch }) {
           />
         </div>
 
-        {/* Actions — right-aligned. For a Bo3 we collapse to a small
-            "BO3 · N mapas" pill since each map gets its own CTA below;
-            for a Bo1 the original action column is rendered as before. */}
-        <div className="flex-shrink-0">
-          {isSeries ? (
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface-elevated border border-border/50 text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground">
-              <span className="text-primary font-bold">BO{maps.length}</span>
-              <span>· {maps.length} mapas</span>
-            </div>
-          ) : (
+        {/* Right-side action area for Bo1. For series we let the per-map
+            sub-rows carry the action so the header stays clean. */}
+        {!isSeries && (
+          <div className="flex-shrink-0 hidden sm:block">
             <MatchActions match={match} />
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* PER-MAP SUB-ROWS — only on Bo3/Bo5. Each map: thumbnail, score,
-          map name + which team picked it, and a primary "Ver en 2D"
-          button. Mirrors the cs2.cam Public Demos layout the user asked
-          for. */}
+      {/* Bo1 mobile CTA — when the action column above is hidden on
+          narrow viewports, surface it full-width below. */}
+      {!isSeries && (
+        <div className="px-4 pb-3 sm:hidden">
+          <MatchActions match={match} />
+        </div>
+      )}
+
+      {/* PER-MAP SUB-ROWS — only on Bo3/Bo5. Indented slightly + visually
+          tied to the parent with a subtle top divider so it reads as
+          "the maps of this series" rather than separate cards. */}
       {isSeries && (
-        <div className="px-4 pb-3 space-y-1.5">
+        <div className="px-4 pb-3 pt-1 space-y-1.5 border-t border-border/30">
           {maps.map((m, idx) => (
             <MatchMapSubRow
               key={m.demoId}

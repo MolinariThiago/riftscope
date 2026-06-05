@@ -41,6 +41,7 @@ from db.models.demo import Demo
 from db.models.pro_match import ProMatch
 from db.models.user import User
 from routers.admin import require_admin
+from routers.deps import get_current_user_optional
 from services.demo_sources import get_sources
 from core.bg import spawn
 from services.pro_import import (
@@ -61,18 +62,33 @@ router = APIRouter()
 async def list_pro_matches(
     limit: int = Query(50, le=200),
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
 ):
     """Paginated pro-match feed. Returns matches whose ``played_at`` is on
     or after :func:`get_pro_cutoff`, PLUS every manual upload regardless
     of date — manual uploads are intentional curation by the operator,
     so they shouldn't get hidden by the auto-scrape cutoff.
 
+    Visibility:
+      - Admins see EVERY match — including ones still importing,
+        failed, or not yet imported — so they can manage the feed.
+      - Regular users (and anonymous visitors) see ONLY matches with
+        at least one demo that's finished parsing ("Lista para 2D").
+        A card with no watchable demo is noise to them — no import
+        button, nothing to click — so we hide it entirely.
+
     Each match's response carries a ``maps`` array with every Demo
     linked to that ProMatch (via Demo.pro_match_id). For a Bo3 series
     that's 2-3 entries (one per map); for a Bo1 it's a single entry.
     """
     from sqlalchemy import or_
+    is_admin = bool(current_user and current_user.is_admin)
     cutoff = pro_cutoff_naive()
+    # Fetch a wider window than ``limit`` when filtering for non-admins,
+    # because we'll drop the not-yet-watchable cards after the join and
+    # don't want the page to come back short. Admins get the exact
+    # window since they see everything.
+    fetch_limit = limit if is_admin else min(200, limit * 3)
     rows = (
         db.query(ProMatch)
         .filter(or_(
@@ -80,7 +96,7 @@ async def list_pro_matches(
             ProMatch.source == "manual",
         ))
         .order_by(ProMatch.played_at.desc().nullslast(), ProMatch.id.desc())
-        .limit(limit)
+        .limit(fetch_limit)
         .all()
     )
     # Eager-load every Demo that's linked to one of these matches in a
@@ -144,12 +160,25 @@ async def list_pro_matches(
 
     payload: list[dict] = []
     for r in rows:
+        linked = demos_by_match.get(r.id, [])
+        # Non-admins only see matches with at least one watchable
+        # (completed) demo. Everything else — importing, failed,
+        # not-yet-imported — is operator territory, so we skip it
+        # for them. Admins see every card.
+        if not is_admin:
+            has_watchable = any(d.status == "completed" for d in linked)
+            if not has_watchable:
+                continue
         match_dict = r.to_dict()
-        match_dict["maps"] = [_serialise_map(d) for d in demos_by_match.get(r.id, [])]
+        match_dict["maps"] = [_serialise_map(d) for d in linked]
         payload.append(match_dict)
+        # Stop once we've filled the caller's requested page size —
+        # we over-fetched above to survive the filter.
+        if not is_admin and len(payload) >= limit:
+            break
 
     return {
-        "total": len(rows),
+        "total": len(payload),
         "indexFrom": get_pro_cutoff().isoformat(),
         "matches": payload,
     }
