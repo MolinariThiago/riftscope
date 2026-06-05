@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import sys as _sys
 from pathlib import Path
 from typing import Any
 
@@ -428,77 +429,120 @@ async def process_demo(demo_id: int, file_path: str) -> None:
             "demo %s: download done in %.1fs (40%%)", demo_id, dl_elapsed,
         )
 
-        # ---- Stage 2: parse (40% → 95%) -------------------------------
-        # demoparser2 is a Rust binding so we can't get fine-grained
-        # progress out of it. We poll every 5 s (was 2 s — those extra
-        # DB writes added real overhead for slow databases).
+        # ---- Stage 2: parse + persist in an ISOLATED SUBPROCESS -------
+        # Why subprocess: demoparser2 holds 400 MB+ of pandas data at
+        # peak. On Railway Hobby (512 MB total budget shared with the
+        # API + scheduler) this routinely OOM-killed the whole
+        # container, taking the API down with it.  Spawning a child
+        # process means:
+        #   - The parser's RAM is independent of the API's RAM.
+        #   - An OOM kill takes ONLY the child. The parent watches
+        #     the exit code and marks the demo failed cleanly.
+        #   - When the child exits, the OS reclaims its entire heap.
+        #     No accumulating high-water mark across demos.
+        # The subprocess does the full persist (analysis_data +
+        # normalized rows + insights) directly to the DB — we never
+        # marshal the heavy ``analysis`` dict back through IPC.
+        _update_demo(demo_id, processing_progress=45)
+        logger.info("demo %s: spawning parse subprocess (45%%)", demo_id)
+        t_parse = _time.perf_counter()
+        return_code: int | None = None
+
         try:
-            _update_demo(demo_id, processing_progress=45)
-            logger.info("demo %s: parsing demo (45%%)", demo_id)
-            t_parse = _time.perf_counter()
-
-            parser = get_parser()
-
-            parse_task = asyncio.create_task(asyncio.to_thread(parser.parse, local_path))
-            heartbeat_pct = 45
-            while not parse_task.done():
-                await asyncio.sleep(5.0)
-                heartbeat_pct = min(90, heartbeat_pct + 5)
-                _update_demo(demo_id, processing_progress=heartbeat_pct)
-            analysis = await parse_task
-            parse_elapsed = _time.perf_counter() - t_parse
-            meta = analysis["meta"]
-            _update_demo(demo_id, processing_progress=95)
-            logger.info(
-                "demo %s: parse done in %.1fs (95%%)", demo_id, parse_elapsed,
+            proc = await asyncio.create_subprocess_exec(
+                _sys.executable, "-m", "workers.demo_parse_subprocess",
+                str(demo_id), str(local_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                # Run from the apps/api package root so the ``workers``
+                # module import resolves the same way it does for the
+                # main app.
+                cwd=str(Path(__file__).resolve().parent.parent),
             )
+
+            # Pump the child's stdout into our logger so its progress
+            # shows up in the same stream as the rest of the app.
+            async def _pump_logs() -> None:
+                if proc.stdout is None:
+                    return
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    logger.info(
+                        "[sub %s] %s",
+                        demo_id,
+                        line.decode(errors="replace").rstrip(),
+                    )
+
+            pump_task = asyncio.create_task(_pump_logs())
+            try:
+                return_code = await proc.wait()
+            finally:
+                # Make sure the log pump drains everything before we
+                # interpret the exit code.
+                try:
+                    await asyncio.wait_for(pump_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    pump_task.cancel()
         finally:
+            # Clean up the temporary local file regardless of how
+            # the subprocess fared.
             if cleanup_path is not None:
                 try:
                     Path(cleanup_path).unlink(missing_ok=True)
                 except Exception:
                     logger.warning("Failed to clean temp demo file %s", cleanup_path)
 
-        # ---- Stage 3: persist (95% → 100%) ----------------------------
-        t_persist = _time.perf_counter()
-        _update_demo(
-            demo_id,
-            status="completed",
-            processing_progress=100,
-            processed_at=utcnow_naive(),
-            map_name=meta["map"],
-            tick_rate=meta["tickrate"],
-            duration_seconds=meta["durationSeconds"],
-            round_count=meta["roundCount"],
-            score_ct=(meta.get("scoreBySide") or meta["score"])[0],
-            score_tt=(meta.get("scoreBySide") or meta["score"])[1],
-            team_a_name=meta.get("teamA"),
-            team_b_name=meta.get("teamB"),
-            score_a=meta["score"][0],
-            score_b=meta["score"][1],
-            analysis_data=analysis,
-        )
-        _persist_normalized(demo_id, analysis)
-        _persist_insights(demo_id, analysis)
-        _persist_round_tactics(demo_id, analysis, meta["map"])
-        persist_elapsed = _time.perf_counter() - t_persist
+        parse_elapsed = _time.perf_counter() - t_parse
         total_elapsed = _time.perf_counter() - t0
-        logger.info(
-            "demo %s: completed (100%%) — total %.1fs "
-            "[download=%.1fs parse=%.1fs persist=%.1fs]",
-            demo_id, total_elapsed, dl_elapsed, parse_elapsed, persist_elapsed,
-        )
-        # CRITICAL on Railway Hobby (512 MB): drop every reference to
-        # the parsed analysis dict + frame data BEFORE returning so the
-        # cycle GC has nothing held alive across the next demo. Each
-        # ``analysis`` dict carries the full per-tick timeline (hundreds
-        # of MB on a Bo3) — without this, the worker process heap stays
-        # at the high-water mark forever and the next parse starts
-        # already close to the OOM line.
-        del analysis
-        del meta
-        import gc as _gc
-        _gc.collect()
+
+        # Interpret the subprocess exit code.
+        if return_code == 0:
+            logger.info(
+                "demo %s: subprocess succeeded — total %.1fs "
+                "[download=%.1fs parse+persist=%.1fs]",
+                demo_id, total_elapsed, dl_elapsed, parse_elapsed,
+            )
+            # Subprocess already updated the Demo row to completed.
+            return
+
+        # Non-zero exit. SIGKILL by the OOM-killer shows as
+        # ``-9`` on POSIX or ``137`` (128 + 9) when interpreted as an
+        # unsigned exit code by the shell layer.  ``139`` is SIGSEGV,
+        # rare but worth flagging too. In any of those, the child
+        # almost certainly never ran its except-handler so we mark
+        # the demo failed ourselves with a clear message.
+        OOM_CODES = {-9, 9, 137, 139}
+        if return_code in OOM_CODES:
+            msg = (
+                f"Parser killed mid-run (exit {return_code} — likely OOM). "
+                f"Try a smaller demo or upgrade the worker plan."
+            )
+            logger.error("demo %s: %s", demo_id, msg)
+            _update_demo(demo_id, status="failed", error_message=msg)
+        else:
+            # Subprocess returned a non-zero code through its own
+            # except path — it should have marked the demo failed
+            # before exiting.  Double-check the row state; if it's
+            # still ``processing``, mark failed here as a safety net.
+            from db.database import SessionLocal as _SL
+            from db.models.demo import Demo as _Demo
+            db = _SL()
+            try:
+                d = db.query(_Demo).filter(_Demo.id == demo_id).first()
+                if d and d.status == "processing":
+                    d.status = "failed"
+                    d.error_message = (
+                        f"Subprocess exited {return_code} without updating status."
+                    )
+                    db.commit()
+            finally:
+                db.close()
+            logger.error(
+                "demo %s: subprocess exited %s after %.1fs",
+                demo_id, return_code, parse_elapsed,
+            )
 
     except Exception as exc:  # pragma: no cover — defensive
         elapsed = _time.perf_counter() - t0
