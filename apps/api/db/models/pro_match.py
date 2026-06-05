@@ -84,6 +84,16 @@ class ProMatch(Base):
     import_bytes = Column(BigInteger, nullable=True, index=True)
     import_completed_at = Column(DateTime, nullable=True, index=True)
 
+    # Team logo URLs scraped from the source page. HLTV serves stable
+    # team logos at ``https://img-cdn.hltv.org/teamlogo/<id>.svg`` —
+    # the scraper extracts the team id from the row's anchor and we
+    # store the assembled URL. Null when the source didn't surface
+    # team ids (older Liquipedia rows, or any HLTV row without team
+    # links). The frontend renders a small img if present and falls
+    # back to text-only when null.
+    team_a_logo_url = Column(String, nullable=True)
+    team_b_logo_url = Column(String, nullable=True)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -108,4 +118,6 @@ class ProMatch(Base):
             "importCompletedAt": (
                 self.import_completed_at.isoformat() if self.import_completed_at else None
             ),
+            "teamALogoUrl": self.team_a_logo_url,
+            "teamBLogoUrl": self.team_b_logo_url,
         }

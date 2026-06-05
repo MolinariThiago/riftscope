@@ -243,6 +243,15 @@ class HltvSource:
         r'<i[^>]*class="[^"]*\bstar\b[^"]*"',
         re.IGNORECASE,
     )
+    # Team links — used to extract HLTV team IDs so we can construct
+    # the team logo URL (https://img-cdn.hltv.org/teamlogo/{id}.svg).
+    # HLTV is consistent: every team name on /results is wrapped in
+    # an anchor to ``/team/<id>/<slug>``. First two matches per row
+    # correspond to team A and team B in display order.
+    _RE_TEAM_LINK = re.compile(
+        r'href="/team/(\d+)/[^"]*"',
+        re.IGNORECASE,
+    )
 
     # Hard ceiling on the per-match window. Within that cap, the actual
     # window for match N stops where match N+1's anchor starts so the
@@ -327,6 +336,21 @@ class HltvSource:
                 star_count = len(self._RE_STAR_ICON.findall(stars_block.group(1)))
             tier = _stars_to_tier(star_count)
 
+            # Team HLTV IDs → logo URLs. We extract the first two
+            # ``/team/<id>/...`` anchors inside the row window — those
+            # match team A and team B in display order on every row
+            # I've inspected. Best-effort: if HLTV ever ships a row
+            # without team links we just leave the logos null and the
+            # frontend falls back to text-only, which is what the page
+            # used to show anyway.
+            team_links = self._RE_TEAM_LINK.findall(window)
+            team_a_logo_url: str | None = None
+            team_b_logo_url: str | None = None
+            if len(team_links) >= 1:
+                team_a_logo_url = f"https://img-cdn.hltv.org/teamlogo/{team_links[0]}.svg"
+            if len(team_links) >= 2:
+                team_b_logo_url = f"https://img-cdn.hltv.org/teamlogo/{team_links[1]}.svg"
+
             played_at = date_for(start)
             seen_ids.add(hltv_id)
 
@@ -347,6 +371,8 @@ class HltvSource:
                 # sync runs and slow ones.
                 demo_url=None,
                 tier=tier,
+                team_a_logo_url=team_a_logo_url,
+                team_b_logo_url=team_b_logo_url,
             )
 
 

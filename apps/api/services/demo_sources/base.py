@@ -42,6 +42,14 @@ class ExternalMatch:
     # without an event-name whitelist.
     tier: str | None = None
 
+    # Team logo URLs. The HLTV source derives these from the team's
+    # HLTV id (``https://img-cdn.hltv.org/teamlogo/<id>.svg``); other
+    # sources can leave them null and the UI falls back to a text-only
+    # display. Stored as plain URL strings; the frontend loads them
+    # directly from HLTV's CDN (small SVGs, no proxy traffic).
+    team_a_logo_url: str | None = None
+    team_b_logo_url: str | None = None
+
 
 class DemoSource(Protocol):
     name: str

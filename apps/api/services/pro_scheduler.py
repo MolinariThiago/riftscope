@@ -360,6 +360,14 @@ async def _sync_step() -> None:
                     if m.tier and not existing.tier:
                         existing.tier = m.tier
                         changed = True
+                    # Backfill team logos. Same "only if missing" rule
+                    # as tier so manual admin overrides aren't clobbered.
+                    if m.team_a_logo_url and not existing.team_a_logo_url:
+                        existing.team_a_logo_url = m.team_a_logo_url
+                        changed = True
+                    if m.team_b_logo_url and not existing.team_b_logo_url:
+                        existing.team_b_logo_url = m.team_b_logo_url
+                        changed = True
                     if changed:
                         updated += 1
                     continue
@@ -376,6 +384,8 @@ async def _sync_step() -> None:
                         played_at=played_at_naive,
                         demo_url=m.demo_url,
                         tier=m.tier,
+                        team_a_logo_url=m.team_a_logo_url,
+                        team_b_logo_url=m.team_b_logo_url,
                     )
                 )
                 inserted += 1

@@ -117,6 +117,16 @@ def _ensure_steam_columns() -> None:
                     text("ALTER TABLE pro_matches ADD COLUMN import_completed_at TIMESTAMP")
                 )
                 logger.info("migrated pro_matches table: added import_completed_at")
+        # Team logo URLs — set by the HLTV scraper from the team's
+        # HLTV id. Null on legacy rows; the scheduler's next sync pass
+        # backfills them as part of the regular update path.
+        for col_name in ("team_a_logo_url", "team_b_logo_url"):
+            if col_name not in existing_pm:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(f"ALTER TABLE pro_matches ADD COLUMN {col_name} VARCHAR")
+                    )
+                    logger.info("migrated pro_matches table: added %s", col_name)
 
     # Playbook: type + tags columns added after the table first shipped.
     if "playbooks" in insp.get_table_names():

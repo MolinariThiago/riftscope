@@ -861,7 +861,13 @@ function MatchRow({ match }: { match: ProMatch }) {
 
         {/* Teams + score — the centerpiece */}
         <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-          <TeamCell name={match.teamA} winner={aWon} losing={bWon} side="left" />
+          <TeamCell
+            name={match.teamA}
+            logoUrl={match.teamALogoUrl}
+            winner={aWon}
+            losing={bWon}
+            side="left"
+          />
           <div className="flex items-center gap-1.5 font-mono-rs text-lg font-bold px-2">
             <span className={cn(aWon ? "text-primary" : "text-muted-foreground")}>
               {match.scoreA ?? 0}
@@ -871,7 +877,13 @@ function MatchRow({ match }: { match: ProMatch }) {
               {match.scoreB ?? 0}
             </span>
           </div>
-          <TeamCell name={match.teamB} winner={bWon} losing={aWon} side="right" />
+          <TeamCell
+            name={match.teamB}
+            logoUrl={match.teamBLogoUrl}
+            winner={bWon}
+            losing={aWon}
+            side="right"
+          />
         </div>
 
         {/* Actions — right-aligned. For a Bo3 we collapse to a small
@@ -1047,15 +1059,22 @@ function MatchMapSubRow({
 
 function TeamCell({
   name,
+  logoUrl,
   winner,
   losing,
   side,
 }: {
   name: string;
+  /** Team logo URL (HLTV CDN). Null falls back to the initials cube;
+   *  if the image fails to load (404 / CORS / dead CDN) the local
+   *  ``failed`` state flips and we also fall back gracefully. */
+  logoUrl?: string | null;
   winner: boolean;
   losing: boolean;
   side: "left" | "right";
 }) {
+  const [failed, setFailed] = useState(false);
+  const showLogo = !!logoUrl && !failed;
   return (
     <div
       className={cn(
@@ -1065,15 +1084,41 @@ function TeamCell({
     >
       <div
         className={cn(
-          "w-8 h-8 rounded-lg flex items-center justify-center font-mono-rs font-bold text-[11px] flex-shrink-0",
+          "w-8 h-8 rounded-lg flex items-center justify-center font-mono-rs font-bold text-[11px] flex-shrink-0 overflow-hidden",
           winner
-            ? "bg-primary/15 text-primary ring-1 ring-primary/40"
+            ? "bg-primary/15 ring-1 ring-primary/40"
             : losing
-              ? "bg-surface-elevated text-muted-foreground/70"
-              : "bg-surface-elevated text-foreground/80",
+              ? "bg-surface-elevated"
+              : "bg-surface-elevated",
         )}
       >
-        {initials(name)}
+        {showLogo ? (
+          // HLTV logos are tiny SVGs on a CDN we don't own. Use a
+          // plain <img> (not next/image) so we don't have to whitelist
+          // hltv's CDN in next.config.js and we get an honest 404 if
+          // a logo URL goes stale. The wrapping div keeps the team
+          // color ring even when the logo is dark.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={logoUrl ?? ""}
+            alt={`${name} logo`}
+            className="w-full h-full object-contain p-0.5"
+            loading="lazy"
+            onError={() => setFailed(true)}
+          />
+        ) : (
+          <span
+            className={cn(
+              winner
+                ? "text-primary"
+                : losing
+                  ? "text-muted-foreground/70"
+                  : "text-foreground/80",
+            )}
+          >
+            {initials(name)}
+          </span>
+        )}
       </div>
       <span
         className={cn(

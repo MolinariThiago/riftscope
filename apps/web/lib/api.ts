@@ -262,6 +262,11 @@ export const api = {
            *  Intentionally NOT shown in public match cards — keep
            *  the public feed clean while the metadata lives in DB. */
           tier: "S+" | "S" | "A" | "B" | "C" | null;
+          /** Team logo URLs scraped from HLTV (small SVGs on their
+           *  CDN). Null when the source row didn't expose team ids
+           *  — the UI falls back to text-only in that case. */
+          teamALogoUrl: string | null;
+          teamBLogoUrl: string | null;
           playedAt: string | null;
           demoUrl: string | null;
           demoId: number | null;
