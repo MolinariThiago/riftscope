@@ -850,7 +850,15 @@ async def _import_step() -> None:
             return (reimport_bucket, tier_p, played_ts)
 
         candidates.sort(key=_candidate_priority)
+        total_before_limit = len(candidates)
         candidates = candidates[:MAX_IMPORTS_PER_TICK]
+
+        logger.info(
+            "import step: reimport=%d fresh=%d eligible=%d -> taking %d this tick "
+            "(allowed_tiers=%s, cutoff=%s)",
+            len(reimport_candidates), len(fresh_candidates), total_before_limit,
+            len(candidates), allowed_tiers or "ALL", cutoff.date().isoformat(),
+        )
 
         if not candidates:
             _state["last_import_count"] = 0
