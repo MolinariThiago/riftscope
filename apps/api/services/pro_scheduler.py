@@ -874,6 +874,52 @@ async def _import_step() -> None:
             len(candidates), allowed_tiers or "ALL", cutoff.date().isoformat(),
         )
 
+        # One-shot DB-state breakdown so we can see WHERE matches sit when
+        # eligible=0: total since cutoff, how many already have a demo, how
+        # many lack a demo, and of those, why they're excluded (no score /
+        # tier blocked). Cheap counts, logged every tick.
+        try:
+            from sqlalchemy import func as _f
+            total_since = (
+                db.query(_f.count(ProMatch.id))
+                .filter(ProMatch.played_at >= cutoff).scalar() or 0
+            )
+            with_demo = (
+                db.query(_f.count(ProMatch.id))
+                .filter(ProMatch.played_at >= cutoff)
+                .filter(ProMatch.demo_id.isnot(None)).scalar() or 0
+            )
+            no_demo = (
+                db.query(_f.count(ProMatch.id))
+                .filter(ProMatch.played_at >= cutoff)
+                .filter(ProMatch.demo_id.is_(None)).scalar() or 0
+            )
+            no_demo_no_score = (
+                db.query(_f.count(ProMatch.id))
+                .filter(ProMatch.played_at >= cutoff)
+                .filter(ProMatch.demo_id.is_(None))
+                .filter(or_(ProMatch.score_a.is_(None), ProMatch.score_b.is_(None)))
+                .scalar() or 0
+            )
+            no_demo_tier_blocked = 0
+            if allowed_tiers:
+                no_demo_tier_blocked = (
+                    db.query(_f.count(ProMatch.id))
+                    .filter(ProMatch.played_at >= cutoff)
+                    .filter(ProMatch.demo_id.is_(None))
+                    .filter(ProMatch.tier.isnot(None))
+                    .filter(ProMatch.tier.notin_(allowed_tiers))
+                    .scalar() or 0
+                )
+            logger.info(
+                "import DB state (since %s): total=%d with_demo=%d no_demo=%d "
+                "(no_demo & null_score=%d, no_demo & tier_blocked=%d)",
+                cutoff.date().isoformat(), total_since, with_demo, no_demo,
+                no_demo_no_score, no_demo_tier_blocked,
+            )
+        except Exception:
+            logger.exception("import DB-state diagnostic failed")
+
         if not candidates:
             _state["last_import_count"] = 0
             _state["last_import_errors"] = 0
