@@ -9,6 +9,7 @@ the factories pick up the production implementations.
 """
 
 import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -47,6 +48,45 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+
+
+class _SecretRedactor(logging.Filter):
+    """Redacts secrets from every log record before it is emitted.
+
+    httpx logs full request URLs (Steam Web API calls include
+    ``?key=<api-key>``), and connection strings can carry passwords.
+    We rewrite the rendered message in place so secrets never hit
+    stdout / log aggregators.
+    """
+
+    _PATTERNS = (
+        re.compile(r"(key=)[^&\s\"']+", re.IGNORECASE),          # ?key=<steam api key>
+        re.compile(r"(://[^:/\s]+:)[^@/\s]+(@)"),                 # user:password@host
+        re.compile(r"(token=)[^&\s\"']+", re.IGNORECASE),
+        re.compile(r"(password=)[^&\s\"']+", re.IGNORECASE),
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        redacted = msg
+        for pat in self._PATTERNS:
+            if pat.groups >= 2:
+                redacted = pat.sub(r"\1***\2", redacted)
+            else:
+                redacted = pat.sub(r"\1***", redacted)
+        if redacted != msg:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+# Attach to root handlers so it covers propagated records (httpx, uvicorn, etc.)
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_SecretRedactor())
+
 logger = logging.getLogger("riftscope.api")
 
 settings = get_settings()
@@ -256,7 +296,7 @@ async def lifespan(app: FastAPI):
     logger.info(
         "RIFTSCOPE API ready (env=%s, db=%s, parser=%s, storage=%s, queue=%s)",
         settings.environment,
-        settings.database_url,
+        re.sub(r"(://[^:/\s]+:)[^@/\s]+(@)", r"\1***\2", str(settings.database_url)),
         settings.parser_backend,
         settings.storage_backend,
         settings.queue_backend,
