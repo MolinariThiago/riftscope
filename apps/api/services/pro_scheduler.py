@@ -285,6 +285,15 @@ async def _run_loop() -> None:
                     _state["last_sync_skip"] = None
                 last_sync_monotonic = tick_started
 
+            # SELF-HEAL — reset demos stuck in "processing" before the
+            # import step runs. A stuck demo with WAIT_FOR_PARSE=True
+            # blocks the entire import queue indefinitely. Auto-reset
+            # after 60 min so the queue never needs manual intervention.
+            try:
+                _auto_reset_stuck_demos(older_than_minutes=60)
+            except Exception:
+                logger.exception("scheduler auto-reset stuck demos failed")
+
             # IMPORT step — drain the backlog of completed matches
             # that have a demo_url but no demo_id.
             try:
@@ -299,6 +308,61 @@ async def _run_loop() -> None:
                 return
     finally:
         _state["running"] = False
+
+
+# ---------------------------------------------------------------------------
+# Self-heal — auto-reset demos stuck in "processing"
+# ---------------------------------------------------------------------------
+def _auto_reset_stuck_demos(older_than_minutes: int = 60) -> None:
+    """Reset demos that have been stuck in ``processing`` for too long.
+
+    When a Railway container is OOM-killed mid-parse, the Demo row stays
+    at ``status="processing"`` forever because the exception handler
+    never runs. With ``WAIT_FOR_PARSE=True`` that single stuck demo
+    blocks ALL future imports. This function runs every scheduler tick
+    and self-heals without requiring manual admin action.
+    """
+    from datetime import timedelta
+    from db.models.demo import Demo
+    from db.models.pro_match import ProMatch
+
+    cutoff = datetime.utcnow() - timedelta(minutes=max(1, older_than_minutes))
+    db = SessionLocal()
+    try:
+        stuck = (
+            db.query(Demo)
+            .filter(Demo.status == "processing")
+            .filter(Demo.uploaded_at < cutoff)
+            .all()
+        )
+        if not stuck:
+            return
+
+        pro_match_ids = {d.pro_match_id for d in stuck if d.pro_match_id}
+        for d in stuck:
+            d.status = "failed"
+            d.error_message = (
+                "Auto-reset: parsing exceeded time limit "
+                f"({older_than_minutes}min). Worker was likely OOM-killed."
+            )
+
+        if pro_match_ids:
+            matches = (
+                db.query(ProMatch)
+                .filter(ProMatch.id.in_(pro_match_ids))
+                .filter(ProMatch.import_status == "importing")
+                .all()
+            )
+            for m in matches:
+                m.import_status = "failed"
+
+        db.commit()
+        logger.info(
+            "auto-reset: marked %d stuck demo(s) as failed, unblocked %d match(es)",
+            len(stuck), len(pro_match_ids),
+        )
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
