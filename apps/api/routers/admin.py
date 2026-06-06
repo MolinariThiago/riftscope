@@ -740,3 +740,82 @@ def admin_reparse_pro_demos(
         "skipped": skipped,
         "demoIds": [did for did, _ in queued],
     }
+
+
+@router.post("/pro/backfill-logos")
+def admin_backfill_logos(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Force a sync that backfills team logos on existing ProMatches.
+
+    The normal sync path only backfills logos with "only if missing"
+    logic — which requires the match to show up again in a fresh
+    HLTV /results scrape. Older matches that scrolled off the page
+    never get revisited.
+
+    This endpoint re-scrapes HLTV /results (one request, same proxy
+    pool) and force-updates ``team_a_logo_url`` / ``team_b_logo_url``
+    on every matching ProMatch row — even ones that already have a
+    logo URL (in case the HLTV team id changed).
+
+    Returns the count updated.
+    """
+    import asyncio
+    from db.models.pro_match import ProMatch
+    from services.demo_sources.hltv import HltvSource
+
+    # Re-run the HLTV source's list_recent_matches — same codepath
+    # the scheduler uses, so it picks up the same proxy pool / retry
+    # / cooldown behaviour. We only need it for the team logo URLs
+    # though, so we ignore everything else.
+    source = HltvSource()
+    try:
+        loop = asyncio.get_event_loop()
+        matches = loop.run_until_complete(
+            source.list_recent_matches(since=None, limit=200),
+        )
+    except Exception as exc:
+        return {"error": str(exc), "updated": 0}
+
+    # Build a lookup: source_match_id → (logo_a, logo_b)
+    logo_by_sid: dict[str, tuple[str | None, str | None]] = {}
+    for m in matches:
+        logo_by_sid[m.source_match_id] = (
+            m.team_a_logo_url,
+            m.team_b_logo_url,
+        )
+
+    if not logo_by_sid:
+        return {"updated": 0, "scraped": 0}
+
+    # Fetch ProMatches that came from HLTV and are missing at least
+    # one logo.
+    from sqlalchemy import or_
+    candidates = (
+        db.query(ProMatch)
+        .filter(ProMatch.source == "hltv")
+        .filter(or_(
+            ProMatch.team_a_logo_url.is_(None),
+            ProMatch.team_b_logo_url.is_(None),
+        ))
+        .all()
+    )
+
+    updated = 0
+    for pm in candidates:
+        logos = logo_by_sid.get(pm.source_match_id)
+        if not logos:
+            continue
+        changed = False
+        if logos[0] and not pm.team_a_logo_url:
+            pm.team_a_logo_url = logos[0]
+            changed = True
+        if logos[1] and not pm.team_b_logo_url:
+            pm.team_b_logo_url = logos[1]
+            changed = True
+        if changed:
+            updated += 1
+
+    db.commit()
+    return {"updated": updated, "scraped": len(matches)}
