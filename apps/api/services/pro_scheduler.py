@@ -782,13 +782,16 @@ async def _import_step() -> None:
                 or_(ProMatch.tier.in_(allowed_tiers), ProMatch.tier.is_(None))
             )
 
-        # Fresh-candidate query adds the score requirement (a brand-new
-        # match with no score isn't finished yet — don't grab it).
-        q = q_base.filter(
-            ProMatch.score_a.isnot(None)
-        ).filter(
-            ProMatch.score_b.isnot(None)
-        )
+        # Fresh-candidate query. We DO NOT require non-null scores:
+        # HltvSource only lists matches from /results, which by definition
+        # are ALREADY PLAYED (completed) and have a demo link. A NULL score
+        # on those rows is a score-regex parse miss, not a "still live"
+        # signal — blocking on it left the entire Major backlog stuck
+        # (52 no-demo matches with null scores). The import worker visits
+        # the match page and resolves the demo on demand; if there's
+        # genuinely no demo yet it just reports download_failed and we
+        # retry next tick, which is cheap.
+        q = q_base
 
         # ---- Two-bucket fetch: re-imports first, then fresh -----------
         # A "re-import" is a match the operator explicitly asked us to
@@ -833,15 +836,17 @@ async def _import_step() -> None:
         # that the matches they purged earlier are actually next in
         # line, not stuck at the bottom of the candidate pool.
         _state["reimport_queue"] = len(reimport_candidates)
-        # Filter FRESH candidates to actually-completed matches (BO total
-        # >= 2) so we don't grab in-progress 1-0 matches. Re-imports are
-        # exempt: we already downloaded them once, so a NULL/zero score
-        # (stale scrape) shouldn't block getting the demo back.
-        reimport_ids = {id(m) for m in reimport_candidates}
-        candidates = [
-            m for m in candidates
-            if id(m) in reimport_ids or (m.score_a or 0) + (m.score_b or 0) >= 2
-        ]
+        # Completeness filter. We only DROP a candidate when it has a
+        # score that proves it's still in progress (total == 1, i.e. a
+        # live 1-0). Matches with NO score at all are trusted: HltvSource
+        # only lists completed /results matches, and re-imports were
+        # already downloaded once. This keeps the Major backlog (null
+        # scores from a regex miss) eligible instead of silently dropped.
+        def _is_complete_enough(m: ProMatch) -> bool:
+            if m.score_a is None and m.score_b is None:
+                return True  # trust the source (HLTV /results = played)
+            return (m.score_a or 0) + (m.score_b or 0) >= 2
+        candidates = [m for m in candidates if _is_complete_enough(m)]
 
         # Three-level priority sort:
         #   1. Re-imports first (operator-requested retries beat
