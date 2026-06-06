@@ -272,7 +272,7 @@ async def sync_pro_matches(
             # get their scores / logos / tier updated above even if
             # their tier fell out of the allowed set — we don't want
             # to lose metadata updates on rows we already have.
-            if allowed_tiers and (m.tier or "") not in allowed_tiers:
+            if allowed_tiers and m.tier is not None and m.tier not in allowed_tiers:
                 skipped_tier += 1
                 continue
 

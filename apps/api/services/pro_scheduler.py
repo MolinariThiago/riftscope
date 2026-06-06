@@ -380,7 +380,7 @@ async def _sync_step() -> None:
                         updated += 1
                     continue
                 # Tier gate — skip NEW matches outside the allowed set.
-                if allowed_tiers and (m.tier or "") not in allowed_tiers:
+                if allowed_tiers and m.tier is not None and m.tier not in allowed_tiers:
                     skipped_tier += 1
                     continue
                 db.add(
