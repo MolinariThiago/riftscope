@@ -364,6 +364,32 @@ def _auto_reset_stuck_demos(older_than_minutes: int = 60) -> None:
     finally:
         db.close()
 
+    # Also reset ProMatches stuck in "importing" with no linked Demo at all.
+    # This happens when the download died before creating the Demo row
+    # (network timeout, proxy ban, etc.). These matches never appear in
+    # the "stuck demos" query above because there IS no Demo row to find.
+    stale_cutoff = datetime.utcnow() - timedelta(minutes=max(1, older_than_minutes))
+    db2 = SessionLocal()
+    try:
+        from db.models.pro_match import ProMatch as _PM
+        orphan_importing = (
+            db2.query(_PM)
+            .filter(_PM.import_status == "importing")
+            .filter(_PM.demo_id.is_(None))
+            .filter(_PM.played_at < stale_cutoff)
+            .all()
+        )
+        if orphan_importing:
+            for m in orphan_importing:
+                m.import_status = None  # reset to pending so scheduler retries
+            db2.commit()
+            logger.info(
+                "auto-reset: cleared import_status on %d orphan match(es) stuck in 'importing'",
+                len(orphan_importing),
+            )
+    finally:
+        db2.close()
+
 
 # ---------------------------------------------------------------------------
 # Sync step — mirrors the /pro/sync HTTP handler's logic in-process.
