@@ -310,6 +310,9 @@ async def _sync_step() -> None:
     inserted = 0
     updated = 0
     skipped_tier = 0
+    skipped_cutoff = 0
+    skipped_existing = 0
+    seen = 0
     errors = 0
 
     # Tier filter — same set the import step uses. Applied to NEW
@@ -337,7 +340,9 @@ async def _sync_step() -> None:
                 # endpoint. We drop anything before the configured
                 # PRO_INDEX_FROM (defaults to today) so the DB stays
                 # focused on the snapshot the operator opted into.
+                seen += 1
                 if played_at_naive is None or played_at_naive < cutoff:
+                    skipped_cutoff += 1
                     continue
                 existing = (
                     db.query(ProMatch)
@@ -378,6 +383,8 @@ async def _sync_step() -> None:
                         changed = True
                     if changed:
                         updated += 1
+                    else:
+                        skipped_existing += 1
                     continue
                 # Tier gate — skip NEW matches outside the allowed set.
                 if allowed_tiers and m.tier is not None and m.tier not in allowed_tiers:
@@ -411,11 +418,12 @@ async def _sync_step() -> None:
         "updated": updated,
         "errors": errors,
     }
-    if inserted or updated:
-        logger.info(
-            "scheduler sync: +%d new, ~%d updated, %d errors",
-            inserted, updated, errors,
-        )
+    logger.info(
+        "scheduler sync breakdown: seen=%d cutoff(%s)=%d existing=%d "
+        "tier_blocked=%d -> inserted=%d updated=%d errors=%d allowed_tiers=%s",
+        seen, cutoff.date().isoformat(), skipped_cutoff, skipped_existing,
+        skipped_tier, inserted, updated, errors, sorted(allowed_tiers) or "ALL",
+    )
 
 
 # ---------------------------------------------------------------------------
