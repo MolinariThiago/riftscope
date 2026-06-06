@@ -762,22 +762,33 @@ async def _import_step() -> None:
         # fine for auto-import.
         raw_tiers = get_settings().pro_auto_tiers or ""
         allowed_tiers = [t.strip() for t in raw_tiers.split(",") if t.strip()]
-        q = (
+        from sqlalchemy import or_
+
+        # Base query — NO score filter. Re-imports draw from this directly
+        # (we already downloaded them once, so scores being NULL — e.g. the
+        # score regex failed on an older scrape — shouldn't block getting
+        # the demo back). Fresh candidates add the score filter below.
+        q_base = (
             db.query(ProMatch)
             .filter(ProMatch.played_at >= cutoff)
             .filter(ProMatch.demo_id == None)  # noqa: E711
-            .filter(ProMatch.score_a.isnot(None))
-            .filter(ProMatch.score_b.isnot(None))
         )
         if allowed_tiers:
             # Allow NULL-tier matches through: SQL NULL IN (...) evaluates
             # to NULL (falsy), so tier.in_() alone silently excludes every
             # unclassified match. We want to download those too — if the
             # HLTV star regex failed, the match is still worth importing.
-            from sqlalchemy import or_
-            q = q.filter(
+            q_base = q_base.filter(
                 or_(ProMatch.tier.in_(allowed_tiers), ProMatch.tier.is_(None))
             )
+
+        # Fresh-candidate query adds the score requirement (a brand-new
+        # match with no score isn't finished yet — don't grab it).
+        q = q_base.filter(
+            ProMatch.score_a.isnot(None)
+        ).filter(
+            ProMatch.score_b.isnot(None)
+        )
 
         # ---- Two-bucket fetch: re-imports first, then fresh -----------
         # A "re-import" is a match the operator explicitly asked us to
@@ -798,7 +809,7 @@ async def _import_step() -> None:
         # pool of 50.  Typical re-import burst is 10-30 matches; even
         # 200 wouldn't be expensive.
         reimport_candidates: list[ProMatch] = (
-            q.filter(ProMatch.import_completed_at.isnot(None))
+            q_base.filter(ProMatch.import_completed_at.isnot(None))
             .order_by(ProMatch.played_at.desc().nullslast())
             .all()
         )
@@ -822,11 +833,14 @@ async def _import_step() -> None:
         # that the matches they purged earlier are actually next in
         # line, not stuck at the bottom of the candidate pool.
         _state["reimport_queue"] = len(reimport_candidates)
-        # Filter to actually-completed matches (BO total >= 2). This
-        # avoids importing in-progress 1-0 matches that aren't done.
+        # Filter FRESH candidates to actually-completed matches (BO total
+        # >= 2) so we don't grab in-progress 1-0 matches. Re-imports are
+        # exempt: we already downloaded them once, so a NULL/zero score
+        # (stale scrape) shouldn't block getting the demo back.
+        reimport_ids = {id(m) for m in reimport_candidates}
         candidates = [
             m for m in candidates
-            if (m.score_a or 0) + (m.score_b or 0) >= 2
+            if id(m) in reimport_ids or (m.score_a or 0) + (m.score_b or 0) >= 2
         ]
 
         # Three-level priority sort:
