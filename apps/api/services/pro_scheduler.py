@@ -589,7 +589,10 @@ def _import_backlog_size() -> int:
             .filter(ProMatch.score_b.isnot(None))
         )
         if allowed_tiers:
-            q = q.filter(ProMatch.tier.in_(allowed_tiers))
+            from sqlalchemy import or_
+            q = q.filter(
+                or_(ProMatch.tier.in_(allowed_tiers), ProMatch.tier.is_(None))
+            )
         return q.count()
     finally:
         db.close()
@@ -767,7 +770,14 @@ async def _import_step() -> None:
             .filter(ProMatch.score_b.isnot(None))
         )
         if allowed_tiers:
-            q = q.filter(ProMatch.tier.in_(allowed_tiers))
+            # Allow NULL-tier matches through: SQL NULL IN (...) evaluates
+            # to NULL (falsy), so tier.in_() alone silently excludes every
+            # unclassified match. We want to download those too — if the
+            # HLTV star regex failed, the match is still worth importing.
+            from sqlalchemy import or_
+            q = q.filter(
+                or_(ProMatch.tier.in_(allowed_tiers), ProMatch.tier.is_(None))
+            )
 
         # ---- Two-bucket fetch: re-imports first, then fresh -----------
         # A "re-import" is a match the operator explicitly asked us to
