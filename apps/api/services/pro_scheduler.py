@@ -494,18 +494,18 @@ def _import_backlog_size() -> int:
 def _sync_skip_reason() -> str | None:
     """Return a one-line reason to SKIP the next sync, or None to proceed.
 
-    Two reasons we don't bother hitting HLTV /results:
-      - ``budget_exhausted``: today's download budget is gone, so
-        even if sync finds new matches the import step can't act on
-        them. Saves one proxy hit per skipped window.
-      - ``backlog_full``: there are already ``SYNC_SKIP_BACKLOG`` or
-        more matches eligible for import but unimported. Adding more
-        rows to the queue when we can't drain it is wasted scraping.
+    Only ONE reason now — a huge import backlog. We intentionally
+    DO NOT skip sync when the download budget is exhausted: the sync
+    step is a single HLTV /results scrape (cheap, no demo download)
+    and its value is keeping the DB current with scores, logos and
+    new match entries. Skipping it when budget is gone means the
+    feed goes stale for the rest of the UTC day even though the
+    discovery traffic costs almost nothing.
+
+    The IMPORT step already has its own budget gate that prevents
+    downloads when the cap is reached — that's the right place to
+    enforce the budget, not here in sync.
     """
-    if DAILY_DOWNLOAD_LIMIT_GB > 0:
-        used = _bytes_downloaded_today()
-        if used >= DAILY_DOWNLOAD_LIMIT_GB * (1024 ** 3):
-            return "budget_exhausted"
     if SYNC_SKIP_BACKLOG > 0:
         try:
             backlog = _import_backlog_size()
