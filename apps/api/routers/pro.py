@@ -201,7 +201,17 @@ async def sync_pro_matches(
     inserted = 0
     updated = 0
     skipped_before_cutoff = 0
+    skipped_tier = 0
     errors: list[dict] = []
+
+    # Apply the same tier filter the scheduler uses — without this,
+    # the manual Sync button fills the DB with B/C tier matches that
+    # the user explicitly opted out of (and just purged).  The
+    # existing ProMatch updates path below still runs for rows that
+    # are already in the DB (e.g. updating scores on an existing
+    # A-tier match), so the filter only blocks NEW inserts.
+    raw_tiers = get_settings().pro_auto_tiers or ""
+    allowed_tiers = {t.strip() for t in raw_tiers.split(",") if t.strip()}
 
     for source in get_sources():
         try:
@@ -256,6 +266,16 @@ async def sync_pro_matches(
                     updated += 1
                 continue
 
+            # Tier gate — only INSERT new matches whose tier is in the
+            # allowed set. When allowed_tiers is empty (no env set),
+            # everything passes (backward-compat). Existing rows still
+            # get their scores / logos / tier updated above even if
+            # their tier fell out of the allowed set — we don't want
+            # to lose metadata updates on rows we already have.
+            if allowed_tiers and (m.tier or "") not in allowed_tiers:
+                skipped_tier += 1
+                continue
+
             db.add(
                 ProMatch(
                     source=m.source,
@@ -269,6 +289,8 @@ async def sync_pro_matches(
                     played_at=played_at_naive,
                     demo_url=m.demo_url,
                     tier=m.tier,
+                    team_a_logo_url=m.team_a_logo_url,
+                    team_b_logo_url=m.team_b_logo_url,
                 )
             )
             inserted += 1
@@ -278,6 +300,8 @@ async def sync_pro_matches(
         "inserted": inserted,
         "updated": updated,
         "skipped_before_cutoff": skipped_before_cutoff,
+        "skipped_tier": skipped_tier,
+        "allowed_tiers": sorted(allowed_tiers) if allowed_tiers else None,
         "errors": errors,
     }
 

@@ -309,7 +309,15 @@ async def _sync_step() -> None:
     since = datetime.now(timezone.utc) - timedelta(days=14)
     inserted = 0
     updated = 0
+    skipped_tier = 0
     errors = 0
+
+    # Tier filter — same set the import step uses. Applied to NEW
+    # inserts only; existing rows still receive score / logo / tier
+    # updates so we don't lose metadata on rows already in the DB.
+    raw_tiers = get_settings().pro_auto_tiers or ""
+    allowed_tiers = {t.strip() for t in raw_tiers.split(",") if t.strip()}
+
     db = SessionLocal()
     try:
         for source in get_sources():
@@ -370,6 +378,10 @@ async def _sync_step() -> None:
                         changed = True
                     if changed:
                         updated += 1
+                    continue
+                # Tier gate — skip NEW matches outside the allowed set.
+                if allowed_tiers and (m.tier or "") not in allowed_tiers:
+                    skipped_tier += 1
                     continue
                 db.add(
                     ProMatch(
