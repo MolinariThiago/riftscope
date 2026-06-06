@@ -414,9 +414,15 @@ async def _sync_step() -> None:
 
     _state["last_sync_at"] = datetime.now(timezone.utc).isoformat()
     _state["last_sync_result"] = {
+        "seen": seen,
         "inserted": inserted,
         "updated": updated,
+        "skipped_cutoff": skipped_cutoff,
+        "skipped_existing": skipped_existing,
+        "skipped_tier": skipped_tier,
         "errors": errors,
+        "allowed_tiers": sorted(allowed_tiers) if allowed_tiers else [],
+        "cutoff_date": cutoff.date().isoformat(),
     }
     logger.info(
         "scheduler sync breakdown: seen=%d cutoff(%s)=%d existing=%d "
