@@ -619,11 +619,27 @@ async def delete_pro_match(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
-    """Admin-only cleanup. Previously this had NO auth — any visitor
-    could enumerate ``match_id`` and wipe entries from the pro feed."""
+    """Admin-only cleanup — deletes the ProMatch AND every Demo linked
+    to it (via ``Demo.pro_match_id``). Cascade-deletes on the Demo
+    model take care of DemoPlayer / DemoRound / DemoKill children.
+
+    Returns ``{deleted: true, demosDeleted: N}`` so the UI chip can
+    confirm what happened.
+    """
     row = db.query(ProMatch).filter(ProMatch.id == match_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Pro match not found")
+
+    # Delete every Demo linked to this match first — cascade wipes
+    # DemoPlayer / DemoRound / DemoKill children.
+    linked_demos = (
+        db.query(Demo)
+        .filter(Demo.pro_match_id == match_id)
+        .all()
+    )
+    for d in linked_demos:
+        db.delete(d)
+
     db.delete(row)
     db.commit()
-    return None
+    return {"deleted": True, "demosDeleted": len(linked_demos)}

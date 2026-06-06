@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   Trophy,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -803,6 +804,7 @@ export default function ProMatchesPage() {
               key={dateLabel}
               dateLabel={dateLabel}
               matches={matches}
+              isAdmin={isAdmin}
             />
           ))}
         </div>
@@ -921,9 +923,11 @@ function FilterDropdown({
 function DateGroup({
   dateLabel,
   matches,
+  isAdmin,
 }: {
   dateLabel: string;
   matches: ProMatch[];
+  isAdmin: boolean;
 }) {
   return (
     <section>
@@ -938,14 +942,14 @@ function DateGroup({
       </div>
       <div className="space-y-2.5">
         {matches.map((m) => (
-          <MatchRow key={m.id} match={m} />
+          <MatchRow key={m.id} match={m} isAdmin={isAdmin} />
         ))}
       </div>
     </section>
   );
 }
 
-function MatchRow({ match }: { match: ProMatch }) {
+function MatchRow({ match, isAdmin }: { match: ProMatch; isAdmin: boolean }) {
   const aWon =
     match.scoreA != null &&
     match.scoreB != null &&
@@ -962,6 +966,12 @@ function MatchRow({ match }: { match: ProMatch }) {
   // Tier chip + colour — drives both the left rail accent and the
   // small badge in the header so the importance of the match reads
   // at a glance instead of being buried in a tooltip.
+  const qc = useQueryClient();
+  const deleteMatch = useMutation({
+    mutationFn: () => api.pro.deleteMatch(match.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
+  });
+
   const tier = match.tier;
   const tierToneClass: Record<string, string> = {
     "S+": "text-amber-400 border-amber-400/40 bg-amber-400/10",
@@ -1034,6 +1044,36 @@ function MatchRow({ match }: { match: ProMatch }) {
             <Layers size={9} />
             BO{maps.length}
           </span>
+        )}
+        {/* Admin delete — small trash icon, hidden for non-admins.
+            Confirm prompt because it's destructive (deletes the
+            ProMatch + every linked Demo). */}
+        {isAdmin && (
+          <button
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `Borrar ${match.teamA} vs ${match.teamB} y todas sus demos parseadas?`,
+                )
+              )
+                return;
+              deleteMatch.mutate();
+            }}
+            disabled={deleteMatch.isPending}
+            title="Borrar esta partida y todas sus demos"
+            className={cn(
+              "inline-flex items-center justify-center p-1 rounded",
+              "text-muted-foreground/50 hover:text-loss hover:bg-loss/10",
+              "opacity-0 group-hover:opacity-100 transition-all",
+              "disabled:opacity-50",
+            )}
+          >
+            {deleteMatch.isPending ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <Trash2 size={11} />
+            )}
+          </button>
         )}
       </div>
 

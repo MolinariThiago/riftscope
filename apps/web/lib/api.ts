@@ -322,6 +322,12 @@ export const api = {
         status: "importing" | "existing";
         message: string;
       }>(`/pro/matches/${matchId}/import`, { method: "POST" }),
+    /** Admin-only: delete a ProMatch and all its linked Demos. */
+    deleteMatch: (matchId: number) =>
+      request<{ deleted: boolean; demosDeleted: number }>(
+        `/pro/matches/${matchId}`,
+        { method: "DELETE" },
+      ),
     /** Verify the configured outbound proxy actually changes the IP.
      *  Use the "Probar proxy" button on /pro to check before relying
      *  on it. Returns the direct + proxy public IPs so you can see
