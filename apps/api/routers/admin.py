@@ -636,7 +636,7 @@ def admin_purge_low_tier(
 
 
 @router.post("/demos/reparse-pro")
-def admin_reparse_pro_demos(
+async def admin_reparse_pro_demos(
     limit: int = 20,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
