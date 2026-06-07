@@ -397,82 +397,159 @@ def _auto_reset_stuck_demos(older_than_minutes: int = 60) -> None:
 
 
 # Max retry attempts for failed demos before giving up permanently.
-_FAILED_RETRY_MAX = int(os.getenv("PRO_FAILED_RETRY_MAX", "3"))
+def _safe_env_int(key: str, default: int) -> int:
+    """Parse an int env var with a sensible default on malformed input."""
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("env var %s=%r is not a valid int — using default %d", key, raw, default)
+        return default
+
+
+_FAILED_RETRY_MAX = _safe_env_int("PRO_FAILED_RETRY_MAX", 3)
 # Only retry demos that failed at least this many minutes ago (avoids
 # hammering a demo that fails instantly every tick).
-_FAILED_RETRY_COOLDOWN_MIN = int(os.getenv("PRO_FAILED_RETRY_COOLDOWN_MIN", "30"))
+_FAILED_RETRY_COOLDOWN_MIN = _safe_env_int("PRO_FAILED_RETRY_COOLDOWN_MIN", 30)
+
+
+# Patterns in error_message that mark a failure as PERMANENT — no retry
+# will succeed because the issue is structural (the file is malformed,
+# the archive is unsupported, the demo failed the quality gate, etc.).
+_NON_RETRYABLE_ERROR_PATTERNS = (
+    "quality check",
+    "unrecognised file format",
+    "unrecognized file format",
+    "unsupported",
+    "no .dem files",
+    "no unrar binary",
+    "no demo_url",
+    "no source_match_id",
+    "demoparser2 rejected every prop",
+    "truncated or from an unsupported cs2 build",
+)
+
+
+def _is_non_retryable(error_message: str | None) -> bool:
+    err = (error_message or "").lower()
+    return any(pat in err for pat in _NON_RETRYABLE_ERROR_PATTERNS)
+
+
+def _retry_count_from_message(error_message: str | None) -> int:
+    """Pull the current retry index out of the error_message marker."""
+    if not error_message or "[retry " not in error_message:
+        return 0
+    import re as _re
+    m = _re.search(r"\[retry (\d+)/", error_message)
+    return int(m.group(1)) if m else 0
 
 
 def _auto_retry_failed_demos() -> int:
-    """Re-queue demos that failed with a retryable error.
+    """Re-trigger parsing for demos that failed with a transient error.
 
-    Marks failed demos back to ``queued`` so the import step picks them
-    up again. Only demos with fewer than ``_FAILED_RETRY_MAX`` prior
-    attempts are eligible. Non-retryable errors (unrecognized format,
-    quality gate) are excluded.
+    Two scenarios are handled:
 
-    Returns the number of demos re-queued.
+    1. **Demo.status = 'failed'** with a retryable error_message
+       (worker OOM, S3 download glitch, parser transient failure):
+       reset to ``queued`` AND spawn ``process_demo`` so the parser
+       actually runs again. The old version only flipped status — the
+       demo then sat in ``queued`` forever because nothing polls for
+       queued demos. This is the critical bug fix.
+
+    2. **ProMatch.import_status = 'failed'** with no Demo row
+       (download itself failed — Cloudflare ban, proxy timeout, HLTV
+       didn't have the .dem URL yet): clear ``import_status`` so the
+       next ``_import_step`` tick re-attempts the download.
+
+    Returns the number of demos/matches re-queued.
     """
-    non_retryable_patterns = [
-        "quality check",
-        "unrecognised file format",
-        "unsupported",
-        "no .dem files",
-        "no unrar binary",
-        "no demo_url",
-    ]
-
     cooldown_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         minutes=max(1, _FAILED_RETRY_COOLDOWN_MIN)
     )
 
+    requeued_demos: list[tuple[int, str]] = []  # (demo_id, storage_filename)
+    requeued_matches = 0
+
     db = SessionLocal()
     try:
-        failed = (
+        # ---- Case 1: failed Demo rows ----------------------------------
+        failed_demos = (
             db.query(Demo)
             .filter(Demo.status == "failed")
             .filter(Demo.pro_match_id.isnot(None))
             .filter(Demo.uploaded_at < cooldown_cutoff)
             .all()
         )
-        requeued = 0
-        for d in failed:
-            # Skip non-retryable errors.
-            err = (d.error_message or "").lower()
-            if any(pat in err for pat in non_retryable_patterns):
+        for d in failed_demos:
+            if _is_non_retryable(d.error_message):
                 continue
-            # Track retry count in the error message itself (simple,
-            # no schema change needed).
-            retry_count = 0
-            if d.error_message and "[retry " in d.error_message:
-                import re
-                m = re.search(r"\[retry (\d+)/", d.error_message)
-                if m:
-                    retry_count = int(m.group(1))
+            retry_count = _retry_count_from_message(d.error_message)
             if retry_count >= _FAILED_RETRY_MAX:
                 continue
-            # Reset the demo so the worker picks it up again.
             old_error = d.error_message or "unknown"
             d.status = "queued"
-            d.error_message = f"[retry {retry_count + 1}/{_FAILED_RETRY_MAX}] previous: {old_error}"
+            d.error_message = (
+                f"[retry {retry_count + 1}/{_FAILED_RETRY_MAX}] previous: {old_error}"
+            )
             d.processing_progress = 0
-            # Also clear the parent match's import_status so the
-            # scheduler doesn't skip it as "already imported".
-            if d.pro_match_id:
-                match = db.query(ProMatch).filter(ProMatch.id == d.pro_match_id).first()
-                if match and match.import_status == "failed":
-                    match.import_status = None
-            requeued += 1
+            if d.storage_filename:
+                requeued_demos.append((d.id, d.storage_filename))
 
-        if requeued:
+        # ---- Case 2: ProMatches whose DOWNLOAD failed (no Demo row) ----
+        # Those can only be detected at the ProMatch level (Demo never
+        # got created). They get retried by simply clearing
+        # ``import_status`` so the import step picks them up again.
+        # We track retry count in ``import_error`` the same way.
+        failed_dl_matches = (
+            db.query(ProMatch)
+            .filter(ProMatch.import_status == "failed")
+            .filter(ProMatch.demo_id.is_(None))
+            .all()
+        )
+        for m in failed_dl_matches:
+            if _is_non_retryable(m.import_error):
+                continue
+            retry_count = _retry_count_from_message(m.import_error)
+            if retry_count >= _FAILED_RETRY_MAX:
+                continue
+            old_error = m.import_error or "unknown"
+            m.import_status = None  # eligible for re-import next tick
+            m.import_error = (
+                f"[retry {retry_count + 1}/{_FAILED_RETRY_MAX}] previous: {old_error}"
+            )
+            requeued_matches += 1
+
+        if requeued_demos or requeued_matches:
             db.commit()
-            logger.info("auto-retry: re-queued %d failed demo(s) for retry", requeued)
-        return requeued
+            logger.info(
+                "auto-retry: re-spawned %d failed demo parse(s), unblocked %d failed download(s)",
+                len(requeued_demos), requeued_matches,
+            )
     except Exception:
         logger.exception("auto-retry failed")
+        db.rollback()
         return 0
     finally:
         db.close()
+
+    # ---- Spawn the parser tasks AFTER releasing the DB session -------
+    # Done outside the session so a long-running ``process_demo`` can't
+    # hold a connection. The worker opens its own session.
+    if requeued_demos:
+        from core.bg import spawn
+        from services.storage import UPLOAD_DIR
+        from workers.demo_worker import process_demo
+
+        for demo_id, storage_filename in requeued_demos:
+            # Use the local upload-dir path; the worker will fall back to
+            # S3 by basename if the file isn't present locally (the
+            # storage backend handles both cases transparently).
+            file_path = str(UPLOAD_DIR / storage_filename)
+            spawn(process_demo(demo_id, file_path), name=f"retry-demo-{demo_id}")
+
+    return len(requeued_demos) + requeued_matches
 
 
 # ---------------------------------------------------------------------------

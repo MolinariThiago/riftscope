@@ -36,19 +36,29 @@ logger = logging.getLogger("riftscope.sources.hltv")
 HLTV_RESULTS_URL = "https://www.hltv.org/results"
 HLTV_TIMEOUT = 30.0
 
-# Lazy-import BS4 so the module can still be loaded without it installed
-# (e.g. in test harnesses that stub the source).  All runtime paths that
-# reach _parse() will have it available because requirements.txt pins it.
+# Lazy-import BS4 + pick the best available parser backend. lxml is
+# preferred (faster, more lenient about malformed HTML) but the stdlib
+# ``html.parser`` is a fine fallback when lxml isn't available — e.g.
+# in test harnesses or stripped-down dev environments.
 _bs4_imported = False
 BeautifulSoup = None  # type: ignore[assignment]
+_BS4_PARSER = "html.parser"  # safe default
 
 
 def _ensure_bs4():
-    global _bs4_imported, BeautifulSoup
+    global _bs4_imported, BeautifulSoup, _BS4_PARSER
     if _bs4_imported:
         return
     from bs4 import BeautifulSoup as _BS  # type: ignore
     BeautifulSoup = _BS
+    # Probe for lxml. If it's installed, use it (faster); otherwise
+    # fall back to html.parser silently.
+    try:
+        import lxml  # type: ignore # noqa: F401
+        _BS4_PARSER = "lxml"
+    except ImportError:
+        logger.warning("lxml not available — falling back to html.parser")
+        _BS4_PARSER = "html.parser"
     _bs4_imported = True
 
 
@@ -180,7 +190,7 @@ class HltvSource:
         months.
         """
         _ensure_bs4()
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, _BS4_PARSER)
 
         # --- Day headers ---
         # HLTV wraps day headers in elements containing text like
@@ -244,12 +254,12 @@ class HltvSource:
             # --- Scores ---
             score_a, score_b = _extract_scores(row)
 
-            # Sanity: a finished CS2 map maxes at 19 rounds per side (OT).
-            if (score_a is not None and score_a > 19) or (
-                score_b is not None and score_b > 19
+            # Sanity: HLTV /results shows SERIES scores; max is 5 (Bo9 5-4).
+            if (score_a is not None and score_a > 5) or (
+                score_b is not None and score_b > 5
             ):
                 logger.warning(
-                    "HLTV: suspicious score %s:%s for match %s (%s vs %s)",
+                    "HLTV: suspicious series score %s:%s for match %s (%s vs %s)",
                     score_a, score_b, hltv_id, team_a, team_b,
                 )
 
@@ -332,19 +342,24 @@ def _extract_teams(row) -> list[str]:
 
 
 def _extract_scores(row) -> tuple[int | None, int | None]:
-    """Extract the series score (not per-map scores).
+    """Extract the series score from a HLTV /results row.
 
-    Strategy 1: elements with class containing 'result-score', then
-                score-won/score-lost/score-tied inside.
-    Strategy 2: elements with class containing 'score' that hold a
-                single digit (0-3 for series, 0-19 for maps).
-    Strategy 3: all text nodes that are pure digits between the two
-                team name elements.
+    HLTV /results always shows the SERIES score (e.g. ``2 - 1`` for a
+    Bo3, ``3 - 2`` for a Bo5, ``1 - 0`` for a Bo1) — never per-map
+    scores. Plausible range is **0-5** (covers Bo5 finals at most).
+
+    Strategy 1: ``result-score`` container with ``score-won/lost/tied``
+                children — HLTV's canonical layout.
+    Strategy 2: any ``score-won/lost/tied`` elements anywhere in the row.
+    Strategy 3: text fallback, restricted to single-digit numbers that
+                aren't stars (1-5) or rankings. Conservative — only
+                returns a value when we find exactly TWO plausible
+                numbers separated by `-` or `:`.
     """
-    score_a: int | None = None
-    score_b: int | None = None
+    # Plausible series scores: 0..5 (max series length is Bo9 = 5-4).
+    MAX_PLAUSIBLE = 5
 
-    # Strategy 1: look for the result-score container first (series score)
+    # Strategy 1: result-score container
     score_container = row.find(class_=re.compile(r"\bresult-score\b", re.I))
     if score_container:
         digits = []
@@ -352,35 +367,30 @@ def _extract_scores(row) -> tuple[int | None, int | None]:
             class_=re.compile(r"\bscore-(won|lost|tied)\b", re.I)
         ):
             text = el.get_text(strip=True)
-            if text.isdigit():
+            if text.isdigit() and int(text) <= MAX_PLAUSIBLE:
                 digits.append(int(text))
         if len(digits) >= 2:
             return digits[0], digits[1]
-        if len(digits) == 1:
-            return digits[0], None
 
-    # Strategy 2: any element with 'score' in class
-    score_els = row.find_all(class_=re.compile(r"\bscore\b", re.I))
+    # Strategy 2: any score-won/lost/tied element
     digits = []
-    for el in score_els:
+    for el in row.find_all(class_=re.compile(r"\bscore-(won|lost|tied)\b", re.I)):
         text = el.get_text(strip=True)
-        if text.isdigit():
+        if text.isdigit() and int(text) <= MAX_PLAUSIBLE:
             digits.append(int(text))
     if len(digits) >= 2:
-        # Take the first two — on a Bo3 row these might be per-map
-        # scores. If there's a result-score container we already
-        # returned above, so these are the best we've got.
         return digits[0], digits[1]
 
-    # Strategy 3: regex fallback on the row's full text
+    # Strategy 3: text fallback — look for "N - M" or "N:M" pattern
+    # explicitly, restricted to single digits 0-5. We DON'T accept just
+    # any two numbers because every row has stars (1-5), team rankings
+    # (1-30+), and various other digits that pollute the pool.
     all_text = row.get_text(" ", strip=True)
-    nums = re.findall(r"\b(\d{1,2})\b", all_text)
-    # Filter to plausible scores (0-19)
-    plausible = [int(n) for n in nums if int(n) <= 19]
-    if len(plausible) >= 2:
-        return plausible[0], plausible[1]
+    m = re.search(r"\b([0-5])\s*[-:–]\s*([0-5])\b", all_text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
 
-    return score_a, score_b
+    return None, None
 
 
 def _extract_event(row) -> str | None:
