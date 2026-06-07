@@ -129,6 +129,32 @@ export default function ProMatchesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pro-matches"] }),
   });
 
+  // NUCLEAR OPTION: wipe every ProMatch + Demo + analysis row + S3 object.
+  // The scheduler re-discovers from HLTV on its next tick. Double prompt
+  // because the action is non-reversible.
+  const wipeAll = useMutation({
+    mutationFn: () => api.admin.wipeAllPro(),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["pro-matches"] });
+      alert(
+        `Wipe completado:\n` +
+        `• ${res.pro_matches} ProMatches\n` +
+        `• ${res.demos} Demos\n` +
+        `• ${res.demo_players} DemoPlayers\n` +
+        `• ${res.demo_rounds} Rounds\n` +
+        `• ${res.demo_kills} Kills\n` +
+        `• ${res.files_deleted_local} archivos locales\n` +
+        `• ${res.files_deleted_s3} objetos S3\n` +
+        (res.files_delete_errors > 0
+          ? `\n⚠ ${res.files_delete_errors} errores al borrar archivos (revisar logs)`
+          : ""),
+      );
+    },
+    onError: (err) => {
+      alert(`Error en wipe: ${err instanceof Error ? err.message : String(err)}`);
+    },
+  });
+
   const isAdmin = useAuthStore((s) => s.user?.is_admin ?? false);
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -355,6 +381,40 @@ export default function ProMatchesPage() {
                 <AlertCircle size={13} />
               )}
               Purgar B/C
+            </button>
+            <button
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "⚠️ NUCLEAR: Borrar TODAS las ProMatches, todas sus demos parseadas, todos los archivos en R2 y disco. Solo las demos subidas a mano se conservan. ¿Seguro?",
+                  )
+                ) {
+                  return;
+                }
+                if (
+                  !window.confirm(
+                    "Última confirmación. Esta acción NO se puede deshacer. ¿Proceder?",
+                  )
+                ) {
+                  return;
+                }
+                wipeAll.mutate();
+              }}
+              disabled={wipeAll.isPending}
+              title="NUCLEAR: borra TODO lo pro (matches + demos + análisis + S3). El scheduler re-descubre todo desde HLTV en el próximo tick."
+              className={cn(
+                "inline-flex items-center gap-2 px-3 py-2.5 rounded-lg",
+                "bg-loss/20 text-loss text-xs font-bold border border-loss/50",
+                "hover:bg-loss/30 hover:border-loss",
+                "disabled:opacity-50 transition-colors whitespace-nowrap",
+              )}
+            >
+              {wipeAll.isPending ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <AlertCircle size={13} />
+              )}
+              Wipe ALL
             </button>
             <button
               onClick={() => sync.mutate()}

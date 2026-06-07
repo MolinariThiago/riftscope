@@ -593,6 +593,24 @@ export const api = {
         deletedDemos: number;
         byTier: Record<string, number>;
       }>(`/admin/pro/purge-low-tier`, { method: "POST" }),
+    /** NUCLEAR OPTION — delete EVERY ProMatch + its linked demos and
+     *  the underlying files (local + S3). User-uploaded demos
+     *  (pro_match_id IS NULL) are not touched. Use this when the pro
+     *  pipeline has accumulated too much buggy / half-parsed state
+     *  and you want a clean slate. */
+    wipeAllPro: () =>
+      request<{
+        pro_matches: number;
+        demos: number;
+        demo_players: number;
+        demo_rounds: number;
+        demo_kills: number;
+        demo_insights: number;
+        round_tactics: number;
+        files_deleted_local: number;
+        files_deleted_s3: number;
+        files_delete_errors: number;
+      }>(`/admin/pro/wipe-all`, { method: "POST" }),
     /** Re-queue completed pro demos for parsing with the current
      *  parser. Useful after parser changes so old saved analyses
      *  get refreshed. ``limit`` defaults to 20, max 100. The
