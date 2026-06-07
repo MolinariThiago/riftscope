@@ -283,13 +283,36 @@ async def import_match_demo(
                 result = await _import_match_demo_inner(db, match, proxy)
                 if proxy:
                     await pool.report_success(proxy)
+                logger.info(
+                    "match %s import finished: status=%s message=%s",
+                    match.id, result.status, result.message[:200],
+                )
                 return result
             except _Blocked as exc:
                 if proxy:
                     await pool.report_failure(proxy, exc.reason)
                 last_block = exc.reason
+                logger.info(
+                    "match %s: IP blocked (%s), trying next proxy",
+                    match.id, exc.reason,
+                )
                 # Loop continues with the next acquire().
                 continue
+            except Exception as exc:
+                # Anything that escapes _import_match_demo_inner (not
+                # _Blocked and not a clean ImportResult) is something
+                # we want to see EXPLICITLY. Previously these were
+                # propagated up and swallowed silently by the scheduler.
+                logger.exception(
+                    "match %s: UNEXPECTED error in import worker: %s: %s",
+                    match.id, exc.__class__.__name__, exc,
+                )
+                if proxy:
+                    await pool.report_failure(proxy, exc.__class__.__name__)
+                return ImportResult(
+                    "download_failed", None,
+                    f"Unexpected error: {exc.__class__.__name__}: {exc}",
+                )
         # Exhausted the retry budget.
         msg = (
             f"HLTV bloqueó las {len(tried)} IP que probé (último error: {last_block})."
@@ -358,23 +381,45 @@ async def _do_import(
 
             # --- FASE 2: ENCONTRAR LA DEMO ---
             if "/matches/" in url_base:
-                logger.info("Escaneando el código de la página para robar el link de descarga...")
+                logger.info(
+                    "match %s: GET %s para buscar link de descarga",
+                    match.id, url_base,
+                )
                 page_resp = await client.get(
                     url_base,
                     headers={"Referer": "https://www.hltv.org/results"}
+                )
+                page_status = getattr(page_resp, "status_code", None)
+                logger.info(
+                    "match %s: GET match page returned HTTP %s (%d chars)",
+                    match.id, page_status, len(page_resp.text or ""),
                 )
                 _check_response(page_resp, "match page")
 
                 match_link = re.search(r'href=["\'](/download/demo/\d+)["\']', page_resp.text)
 
                 if not match_link:
-                    return ImportResult(
-                        "no_demo_url", None,
-                        "El partido está en HLTV, pero todavía no subieron el archivo de la demo."
+                    # Most common case for Major matches: HLTV gates the
+                    # demo file behind a delay (sometimes weeks) for
+                    # replay-protection. Surface clearly so the operator
+                    # knows it's a "wait" issue, not a scrape bug.
+                    has_gotv_marker = bool(re.search(
+                        r"(?i)GOTV demo|no demo available|not available yet",
+                        page_resp.text or "",
+                    ))
+                    msg = (
+                        "HLTV todavía no subió el archivo de la demo para este partido "
+                        "(common para Majors — pueden tardar días/semanas). "
+                        f"page_size={len(page_resp.text or '')} gotv_marker_seen={has_gotv_marker}"
                     )
+                    logger.info("match %s: no_demo_url — %s", match.id, msg)
+                    return ImportResult("no_demo_url", None, msg)
 
                 demo_download_url = "https://www.hltv.org" + match_link.group(1)
-                logger.info("¡Link de descarga oficial encontrado!: %s", demo_download_url)
+                logger.info(
+                    "match %s: link de descarga oficial encontrado → %s",
+                    match.id, demo_download_url,
+                )
 
                 # Guardamos el link en tu BD
                 match.demo_url = demo_download_url

@@ -418,6 +418,10 @@ _FAILED_RETRY_COOLDOWN_MIN = _safe_env_int("PRO_FAILED_RETRY_COOLDOWN_MIN", 30)
 # Patterns in error_message that mark a failure as PERMANENT — no retry
 # will succeed because the issue is structural (the file is malformed,
 # the archive is unsupported, the demo failed the quality gate, etc.).
+#
+# IMPORTANT: "HLTV todavía no subió el archivo" is NOT here — that's
+# RETRYABLE because HLTV uploads Major demos with days/weeks of delay.
+# Each retry might find the demo now-available.
 _NON_RETRYABLE_ERROR_PATTERNS = (
     "quality check",
     "unrecognised file format",
@@ -425,7 +429,6 @@ _NON_RETRYABLE_ERROR_PATTERNS = (
     "unsupported",
     "no .dem files",
     "no unrar binary",
-    "no demo_url",
     "no source_match_id",
     "demoparser2 rejected every prop",
     "truncated or from an unsupported cs2 build",
