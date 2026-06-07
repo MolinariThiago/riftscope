@@ -298,8 +298,7 @@ class HltvSource:
             if len(seen_ids) < 5:
                 logger.info(
                     "HLTV row %s (%s vs %s, %s): stars=%d → tier=%s",
-                    hltv_id, team_a if 'team_a' in dir() else "?",
-                    team_b if 'team_b' in dir() else "?",
+                    hltv_id, team_a, team_b,
                     event_name or "?", star_count, tier,
                 )
 
