@@ -238,10 +238,23 @@ class HltvSource:
             if hltv_id in seen_ids:
                 continue
 
-            # The anchor wraps the entire result row on HLTV — all the
-            # data we need is INSIDE it. This is the key insight: we
-            # don't need to walk up, just search within anchor's children.
+            # HLTV's current /results structure puts the anchor INSIDE
+            # a ``<div class="result-con">`` along with siblings
+            # (result-score, stars, event-name). If we search inside
+            # the anchor only, we miss the siblings — that's exactly
+            # what was happening: stars were 0 for every row, so every
+            # match landed in tier C and got tier_blocked.
+            #
+            # Walk up to the nearest result-con ancestor when present;
+            # fall back to the anchor itself otherwise (older / future
+            # layouts where the metadata IS inside the anchor still
+            # work transparently).
             row = anchor
+            container = anchor.find_parent(
+                class_=re.compile(r"\bresult(-con)?\b", re.I)
+            )
+            if container is not None:
+                row = container
 
             # --- Teams ---
             # HLTV renders team names in elements with class containing
@@ -277,6 +290,18 @@ class HltvSource:
             # --- Stars → tier ---
             star_count = _extract_stars(row)
             tier = _stars_to_tier(star_count)
+            # Diagnostic — log the first few rows so we can verify the
+            # star extraction is working on the current HLTV layout.
+            # When the parser silently regresses to 0 stars on every
+            # row (every match gets tier=C, tier_blocked=100%), this
+            # log immediately surfaces the regression.
+            if len(seen_ids) < 5:
+                logger.info(
+                    "HLTV row %s (%s vs %s, %s): stars=%d → tier=%s",
+                    hltv_id, team_a if 'team_a' in dir() else "?",
+                    team_b if 'team_b' in dir() else "?",
+                    event_name or "?", star_count, tier,
+                )
 
             # --- Team logos (from /team/<id>/ links) ---
             team_a_logo, team_b_logo = _extract_team_logos(row)
