@@ -251,6 +251,45 @@ async def _run_loop() -> None:
         if await _wait_or_shutdown(STARTUP_DELAY_SECONDS):
             return
 
+        # ONE-SHOT BACKFILL: mark legacy ProMatches that lack
+        # source_match_id as permanently failed so they stop hammering
+        # the import queue. These rows were inserted by Liquipedia or
+        # an older HLTV scraper that didn't set source_match_id; the
+        # current import path can't construct a download URL without
+        # it. Marking them once here avoids the per-tick churn we saw
+        # with 37 dead matches all returning "no source_match_id".
+        try:
+            db_init = SessionLocal()
+            from sqlalchemy import or_ as _or
+            legacy_dead = (
+                db_init.query(ProMatch)
+                .filter(ProMatch.demo_id.is_(None))
+                .filter(_or(
+                    ProMatch.source_match_id.is_(None),
+                    ProMatch.source_match_id == "",
+                ))
+                .filter(_or(
+                    ProMatch.import_status.is_(None),
+                    ProMatch.import_status != "failed",
+                ))
+                .all()
+            )
+            for m in legacy_dead:
+                m.import_status = "failed"
+                m.import_error = (
+                    "no source_match_id (legacy match — cannot resolve demo URL)"
+                )
+            if legacy_dead:
+                db_init.commit()
+                logger.info(
+                    "scheduler startup: marked %d legacy match(es) without "
+                    "source_match_id as permanently failed",
+                    len(legacy_dead),
+                )
+            db_init.close()
+        except Exception:
+            logger.exception("scheduler startup backfill failed (non-fatal)")
+
         last_sync_monotonic = 0.0
         first_run = True
 
@@ -995,10 +1034,23 @@ async def _import_step() -> None:
         # (we already downloaded them once, so scores being NULL — e.g. the
         # score regex failed on an older scrape — shouldn't block getting
         # the demo back). Fresh candidates add the score filter below.
+        #
+        # IMPORTANT: exclude matches with import_status='failed'. Those
+        # have already been tried and produced a permanent / transient
+        # error. The auto-retry logic (`_auto_retry_failed_demos`) is
+        # the ONLY thing that should bring them back, and it does so by
+        # explicitly clearing import_status. Without this filter, the
+        # candidate query keeps picking the same dead matches every
+        # tick — exactly what we saw with 37 "fresh eligible" matches
+        # all lacking source_match_id.
         q_base = (
             db.query(ProMatch)
             .filter(ProMatch.played_at >= cutoff)
             .filter(ProMatch.demo_id == None)  # noqa: E711
+            .filter(or_(
+                ProMatch.import_status.is_(None),
+                ProMatch.import_status != "failed",
+            ))
         )
         if allowed_tiers:
             # Allow NULL-tier matches through: SQL NULL IN (...) evaluates
@@ -1199,16 +1251,46 @@ async def _import_step() -> None:
                 continue
             try:
                 result = await import_match_demo(db, match)
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "scheduler auto-import failed for match %s", match.id,
                 )
+                # Even on exception, mark the match as failed so the
+                # candidate query stops re-picking it every tick.
+                try:
+                    match.import_status = "failed"
+                    match.import_error = f"{exc.__class__.__name__}: {exc}"
+                    db.commit()
+                except Exception:
+                    logger.exception("failed to persist import error")
+                    db.rollback()
                 errors += 1
                 await release_match(match.id)
                 continue
             else:
                 await release_match(match.id)
             status_counts[result.status] = status_counts.get(result.status, 0) + 1
+
+            # CRITICAL: persist the import_status to the DB. Without this
+            # the candidates query keeps picking up the same failed
+            # matches every tick, hammering the queue with the same
+            # "no source_match_id" / "no_demo_url" matches forever.
+            # Mirrors what import_match_in_background does on the HTTP
+            # import path.
+            try:
+                if result.status in ("queued", "existing"):
+                    match.import_status = None
+                    match.import_error = None
+                else:
+                    match.import_status = "failed"
+                    match.import_error = result.message
+                db.commit()
+            except Exception:
+                logger.exception(
+                    "failed to persist import_status for match %s", match.id,
+                )
+                db.rollback()
+
             if result.status == "queued":
                 queued += 1
                 logger.info(
