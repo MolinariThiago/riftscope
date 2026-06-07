@@ -86,6 +86,41 @@ function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
 
+/**
+ * Walk a polyline by arc length and return the point at fractional progress
+ * ``u`` ∈ [0, 1] along it. Used to replay a recorded drag trajectory so the
+ * entity follows the exact route the user traced, instead of a straight line.
+ */
+function sampleAlongPath(path: Vec2[], u: number): Vec2 {
+  if (path.length === 0) return { x: 0, y: 0 };
+  if (path.length === 1) return path[0];
+  const segLens: number[] = [];
+  let totalLen = 0;
+  for (let i = 1; i < path.length; i++) {
+    const dx = path[i].x - path[i - 1].x;
+    const dy = path[i].y - path[i - 1].y;
+    const len = Math.hypot(dx, dy);
+    segLens.push(len);
+    totalLen += len;
+  }
+  if (totalLen <= 0) return path[path.length - 1];
+  const uu = Math.max(0, Math.min(1, u));
+  const target = uu * totalLen;
+  let acc = 0;
+  for (let i = 0; i < segLens.length; i++) {
+    const next = acc + segLens[i];
+    if (next >= target || i === segLens.length - 1) {
+      const segU = segLens[i] > 0 ? (target - acc) / segLens[i] : 0;
+      return {
+        x: lerp(path[i].x, path[i + 1].x, segU),
+        y: lerp(path[i].y, path[i + 1].y, segU),
+      };
+    }
+    acc = next;
+  }
+  return path[path.length - 1];
+}
+
 // Smooth radial fill via stacked concentric circles (overlap accumulates
 // alpha → denser centre, feathered edge) — reads like a real cloud/blast.
 function radialFill(g: Graphics, r: number, color: number, layers = 9, perLayer = 0.055) {
@@ -307,8 +342,21 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
           const app = appRef.current;
           if (!app) return;
           const fr = framesRef.current;
-          const toFrame = fr.find((f) => f.id === toFrameId);
-          if (!toFrame) return;
+          const toIdx = fr.findIndex((f) => f.id === toFrameId);
+          if (toIdx < 0) return;
+          const toFrame = fr[toIdx];
+          const fromIdx = fr.findIndex((f) => f.id === stateRef.current.currentFrameId);
+          // Going BACKWARDS through the step list? Then the destination
+          // frame's recorded path describes how we LEFT it (going forward).
+          // Reverse it so the entity retraces the same route in reverse.
+          const goingBackwards = fromIdx >= 0 && toIdx < fromIdx;
+
+          // For forward transitions we prefer the destination frame's path
+          // (movement INTO that frame). For backward transitions we use
+          // the CURRENT frame's path (since it describes how we got there)
+          // and play it in reverse.
+          const pathSource = goingBackwards ? fr[fromIdx] : toFrame;
+          const pathsForTransition = pathSource?.paths ?? {};
 
           // Snapshot the CURRENT on-screen positions (could be mid-animation
           // or static from forceRedraw) so we lerp from where things ACTUALLY
@@ -338,7 +386,14 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
               if (!node) continue;
               const pa = from[e.id];
               const pb = toFrame.positions[e.id];
-              if (pa && pb) {
+              const recorded = pathsForTransition[e.id];
+              if (recorded && recorded.length >= 2) {
+                // Replay the recorded route. Forward → 0→1, backward → 1→0
+                // so the entity traces the same path in reverse direction.
+                const uu = goingBackwards ? 1 - u : u;
+                const p = sampleAlongPath(recorded, uu);
+                node.position.set(p.x * rs, p.y * rs);
+              } else if (pa && pb) {
                 node.position.set(
                   lerp(pa.x, pb.x, u) * rs,
                   lerp(pa.y, pb.y, u) * rs,
@@ -672,10 +727,26 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
       try { vp.plugins.pause("drag"); } catch { /* */ }
       const w = vp.toWorld(e.global);
       grabOffset = { x: node.position.x - w.x, y: node.position.y - w.y };
-      dragRef.current = { entityId, node, grabOffset };
+      // Seed the recorded path with the node's CURRENT position (the
+      // start point) so the replayed animation starts where the entity
+      // actually was, not on the second pointermove sample.
+      const rs = stateRef.current.radarSize;
+      const startNorm = {
+        x: node.position.x / rs,
+        y: node.position.y / rs,
+      };
+      dragRef.current = { entityId, node, grabOffset, path: [startNorm] };
     });
   }
-  const dragRef = useRef<{ entityId: string; node: Container; grabOffset: Vec2 } | null>(null);
+  const dragRef = useRef<{
+    entityId: string;
+    node: Container;
+    grabOffset: Vec2;
+    /** Polyline (normalized coords) of every drag sample. Stored on the
+     *  destination frame on pointerup so step-transitions follow the
+     *  same trajectory. */
+    path: Vec2[];
+  } | null>(null);
   const drawRef = useRef<{ tool: "pen" | "arrow" | "rect" | "circle"; pts: Vec2[] } | null>(null);
   const shiftRef = useRef(false);
   // Ticker callback for the per-frame transition animation. Stored in a ref
@@ -718,11 +789,23 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
       return;
     }
     if (dragRef.current) {
-      const { node, grabOffset } = dragRef.current;
+      const { node, grabOffset, path } = dragRef.current;
       const rs = stateRef.current.radarSize;
       const nx = Math.max(0, Math.min(rs, w.x + grabOffset.x));
       const ny = Math.max(0, Math.min(rs, w.y + grabOffset.y));
       node.position.set(nx, ny);
+      // Record the path — but only if we've moved enough since the last
+      // sample to be meaningful (~0.5% of the radar). This decimates a
+      // 60+Hz pointermove stream down to a usable polyline without losing
+      // the shape of the route.
+      const sampleNorm = { x: nx / rs, y: ny / rs };
+      const last = path[path.length - 1];
+      if (
+        !last ||
+        Math.hypot(sampleNorm.x - last.x, sampleNorm.y - last.y) > 0.005
+      ) {
+        path.push(sampleNorm);
+      }
       appRef.current?.renderer.render(appRef.current.stage);
       return;
     }
@@ -749,12 +832,18 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
   }
   function onStagePointerUp() {
     if (dragRef.current) {
-      const { entityId, node } = dragRef.current;
+      const { entityId, node, path } = dragRef.current;
       const rs = stateRef.current.radarSize;
-      usePlaybook.getState().setEntityPosition(entityId, {
+      const finalPos = {
         x: clamp01(node.position.x / rs),
         y: clamp01(node.position.y / rs),
-      });
+      };
+      // Make sure the recorded path ends EXACTLY on the final position —
+      // pointermove decimation can leave the last sample a hair short.
+      if (path.length > 0) {
+        path[path.length - 1] = finalPos;
+      }
+      usePlaybook.getState().setEntityPosition(entityId, finalPos, path);
       dragRef.current = null;
       if (stateRef.current.tool === "select") {
         try { vpRef.current?.plugins.resume("drag"); } catch { /* */ }
@@ -816,13 +905,24 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
     const place = (a: PlaybookFrame, b: PlaybookFrame, u: number) => {
       const hiddenA = new Set(a.hidden ?? []);
       const hiddenB = new Set(b.hidden ?? []);
+      // Use the destination frame's recorded path (it represents the
+      // movement INTO B). Fall back to a straight lerp when no path
+      // was recorded for this entity in B.
+      const pathsB = b.paths ?? {};
       for (const e of entitiesRef.current) {
         const node = nodes.get(e.id);
         if (!node) continue;
         const pa = a.positions[e.id];
         const pb = b.positions[e.id];
-        if (pa && pb) node.position.set(lerp(pa.x, pb.x, u) * rs, lerp(pa.y, pb.y, u) * rs);
-        else if (pa) node.position.set(pa.x * rs, pa.y * rs);
+        const recorded = pathsB[e.id];
+        if (recorded && recorded.length >= 2) {
+          const p = sampleAlongPath(recorded, u);
+          node.position.set(p.x * rs, p.y * rs);
+        } else if (pa && pb) {
+          node.position.set(lerp(pa.x, pb.x, u) * rs, lerp(pa.y, pb.y, u) * rs);
+        } else if (pa) {
+          node.position.set(pa.x * rs, pa.y * rs);
+        }
         node.visible = u < 0.5 ? !hiddenA.has(e.id) : !hiddenB.has(e.id);
       }
     };

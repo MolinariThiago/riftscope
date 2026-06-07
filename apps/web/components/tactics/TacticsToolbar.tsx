@@ -65,6 +65,68 @@ function encodeDrag(p: DragPayload): string {
   return JSON.stringify(p);
 }
 
+// =============================================================================
+// Custom drag ghosts
+// =============================================================================
+// By default the browser uses a snapshot of the dragged element as the
+// "ghost" that follows the cursor — that means you see the whole BUTTON
+// (border, background, padding). For a clean experience we mount a tiny
+// floating element offscreen, hand it to setDragImage, and let it be
+// garbage-collected on the next tick (the browser only needs it for the
+// snapshot, not for the ongoing drag).
+function attachGhost(e: React.DragEvent<HTMLElement>, build: () => HTMLElement) {
+  const ghost = build();
+  // Render the ghost OFFSCREEN but in the DOM so the browser can snapshot it.
+  ghost.style.position = "fixed";
+  ghost.style.top = "-1000px";
+  ghost.style.left = "-1000px";
+  ghost.style.pointerEvents = "none";
+  document.body.appendChild(ghost);
+  const w = ghost.offsetWidth || 32;
+  const h = ghost.offsetHeight || 32;
+  e.dataTransfer.setDragImage(ghost, w / 2, h / 2);
+  // Remove on the NEXT tick — by then the browser has already snapshotted
+  // and is following the cursor with its internal copy.
+  setTimeout(() => {
+    try { document.body.removeChild(ghost); } catch { /* */ }
+  }, 0);
+}
+
+function makeUtilityGhost(src: string): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "width:40px;height:40px;border-radius:50%;background:rgba(20,20,24,0.92);" +
+    "border:1.5px solid rgba(255,255,255,0.35);display:flex;align-items:center;" +
+    "justify-content:center;box-shadow:0 6px 20px rgba(0,0,0,0.45);";
+  const img = document.createElement("img");
+  img.src = src;
+  img.style.cssText = "width:22px;height:22px;filter:brightness(0) invert(1);";
+  wrap.appendChild(img);
+  return wrap;
+}
+
+function makePlayerGhost(tint: string, label: string): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    `width:32px;height:32px;border-radius:50%;background:${tint};` +
+    "border:2px solid white;display:flex;align-items:center;justify-content:center;" +
+    "box-shadow:0 6px 20px rgba(0,0,0,0.5);color:white;font-weight:800;" +
+    "font-family:monospace;font-size:14px;";
+  wrap.textContent = label;
+  return wrap;
+}
+
+function makeBombGhost(): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "width:40px;height:28px;border-radius:6px;background:rgba(20,20,24,0.92);" +
+    "border:1.5px solid #ff5757;display:flex;align-items:center;justify-content:center;" +
+    "color:#ff5757;font-weight:800;font-family:monospace;font-size:13px;" +
+    "box-shadow:0 6px 20px rgba(0,0,0,0.45);";
+  wrap.textContent = "C4";
+  return wrap;
+}
+
 export function TacticsToolbar({ board }: { board: TacticalBoardHandle | null }) {
   const tool = usePlaybook((s) => s.tool);
   const color = usePlaybook((s) => s.color);
@@ -259,7 +321,10 @@ function DragUtilBtn({ kind, src, label }: { kind: EntityKind; src: string; labe
   return (
     <button
       draggable
-      onDragStart={(e) => setDragData(e, { kind })}
+      onDragStart={(e) => {
+        setDragData(e, { kind });
+        attachGhost(e, () => makeUtilityGhost(src));
+      }}
       title={`Arrastrá ${label} al mapa`}
       className="h-9 w-9 flex items-center justify-center rounded-lg border border-border/60 bg-surface-elevated/40 hover:bg-surface-elevated hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing"
     >
@@ -279,7 +344,10 @@ function DragPlayerBtn({ team, label, tint }: { team: Team; label: string; tint:
   return (
     <button
       draggable
-      onDragStart={(e) => setDragData(e, { kind: "player", team })}
+      onDragStart={(e) => {
+        setDragData(e, { kind: "player", team });
+        attachGhost(e, () => makePlayerGhost(tint, label));
+      }}
       title={`Arrastrá un jugador ${label} al mapa`}
       className="h-9 px-2.5 flex items-center gap-1.5 rounded-lg border border-border/60 bg-surface-elevated/40 hover:bg-surface-elevated transition-colors cursor-grab active:cursor-grabbing"
     >
@@ -296,7 +364,10 @@ function DragBombBtn() {
   return (
     <button
       draggable
-      onDragStart={(e) => setDragData(e, { kind: "bomb" })}
+      onDragStart={(e) => {
+        setDragData(e, { kind: "bomb" });
+        attachGhost(e, () => makeBombGhost());
+      }}
       title="Arrastrá la C4 al mapa"
       className="h-9 w-9 flex items-center justify-center rounded-lg border border-border/60 bg-surface-elevated/40 text-loss hover:bg-loss/10 hover:border-loss/40 transition-colors cursor-grab active:cursor-grabbing"
     >

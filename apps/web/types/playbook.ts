@@ -57,6 +57,14 @@ export interface PlaybookFrame {
   /** entityIds hidden on this frame (e.g. a smoke not yet thrown). */
   hidden?: string[];
   strokes: BoardStroke[];
+  /**
+   * Recorded movement paths. ``paths[entityId]`` is the polyline (normalized
+   * coords) the entity travels to reach ``positions[entityId]`` when
+   * transitioning INTO this frame. Captured automatically whenever the user
+   * drags an entity on the board. When absent, animations fall back to a
+   * straight-line ease between this frame's position and the previous one.
+   */
+  paths?: Record<string, Vec2[]>;
 }
 
 export interface PlaybookData {

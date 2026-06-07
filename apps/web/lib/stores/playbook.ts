@@ -127,7 +127,15 @@ interface PlaybookState {
   addPlayers: (team: Team, n: number) => void;
   rotateEntity: (id: string, deltaDeg: number) => void;
   removeEntity: (id: string) => void;
-  setEntityPosition: (entityId: string, pos: Vec2) => void;
+  /**
+   * Move an entity in the CURRENT frame to ``pos`` (normalized).
+   *
+   * Optional ``path`` is the polyline the entity travelled to reach
+   * ``pos`` — captured by the board when the user drags. When present,
+   * the per-step animation will follow that exact route instead of a
+   * straight line. Pass an empty array (or omit) to clear/skip.
+   */
+  setEntityPosition: (entityId: string, pos: Vec2, path?: Vec2[]) => void;
   toggleEntityHidden: (entityId: string) => void;
 
   // ---- stroke actions ----
@@ -379,14 +387,29 @@ export const usePlaybook = create<PlaybookState>((set, get) => {
       });
     },
 
-    setEntityPosition: (entityId, pos) => {
+    setEntityPosition: (entityId, pos, path) => {
       const { frames, currentFrameId } = get();
+      // Only store paths long enough to be meaningful (≥3 points).
+      // Shorter ones are either a stationary click or a single straight
+      // jump — straight-line interpolation already covers those.
+      const keepPath = path && path.length >= 3;
       set({
-        frames: frames.map((f) =>
-          f.id === currentFrameId
-            ? { ...f, positions: { ...f.positions, [entityId]: pos } }
-            : f,
-        ),
+        frames: frames.map((f) => {
+          if (f.id !== currentFrameId) return f;
+          const positions = { ...f.positions, [entityId]: pos };
+          const prevPaths = f.paths ?? {};
+          const nextPaths: Record<string, Vec2[]> = { ...prevPaths };
+          if (keepPath) {
+            // Normalised path is stored on the destination frame — it
+            // represents how the entity moves INTO this frame.
+            nextPaths[entityId] = path!.map((p) => ({ x: p.x, y: p.y }));
+          } else if (path && path.length < 3 && nextPaths[entityId]) {
+            // Tiny drag → user repositioned slightly; the old recorded
+            // path no longer matches the new endpoint, so drop it.
+            delete nextPaths[entityId];
+          }
+          return { ...f, positions, paths: nextPaths };
+        }),
         dirty: true,
       });
     },
