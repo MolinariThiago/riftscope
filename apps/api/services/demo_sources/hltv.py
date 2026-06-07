@@ -254,12 +254,17 @@ class HltvSource:
             # --- Scores ---
             score_a, score_b = _extract_scores(row)
 
-            # Sanity: HLTV /results shows SERIES scores; max is 5 (Bo9 5-4).
-            if (score_a is not None and score_a > 5) or (
-                score_b is not None and score_b > 5
+            # Sanity: a CS2 Bo1 maxes around 22-19 (3 OT). Series scores
+            # cap at 5 (Bo9). Anything past 35 is almost certainly junk —
+            # an HLTV team ranking, a stat number, etc. — so we surface
+            # it without blocking the insert (the score column is just
+            # cosmetic on /pro until the demo is parsed).
+            if (score_a is not None and score_a > 35) or (
+                score_b is not None and score_b > 35
             ):
                 logger.warning(
-                    "HLTV: suspicious series score %s:%s for match %s (%s vs %s)",
+                    "HLTV: implausible score %s:%s for match %s (%s vs %s) — "
+                    "exceeds even multi-OT cap, likely a wrong DOM element",
                     score_a, score_b, hltv_id, team_a, team_b,
                 )
 
@@ -342,24 +347,33 @@ def _extract_teams(row) -> list[str]:
 
 
 def _extract_scores(row) -> tuple[int | None, int | None]:
-    """Extract the series score from a HLTV /results row.
+    """Extract the score from a HLTV /results row.
 
-    HLTV /results always shows the SERIES score (e.g. ``2 - 1`` for a
-    Bo3, ``3 - 2`` for a Bo5, ``1 - 0`` for a Bo1) — never per-map
-    scores. Plausible range is **0-5** (covers Bo5 finals at most).
+    HLTV /results shows TWO different score conventions depending on
+    match format:
 
-    Strategy 1: ``result-score`` container with ``score-won/lost/tied``
-                children — HLTV's canonical layout.
-    Strategy 2: any ``score-won/lost/tied`` elements anywhere in the row.
-    Strategy 3: text fallback, restricted to single-digit numbers that
-                aren't stars (1-5) or rankings. Conservative — only
-                returns a value when we find exactly TWO plausible
-                numbers separated by `-` or `:`.
+    * **Bo3 / Bo5** → SERIES score (e.g. ``2 - 1``, ``3 - 2``).
+      Range: 0..5 (5 is the cap on a Bo9 final).
+    * **Bo1** → per-MAP score (e.g. ``16 - 14``, ``22 - 19``).
+      Range: 0..30+ — CS2 OT is open-ended (MR3 per OT half).
+      The 22-19 G2-vs-Monte 3OT result is a real and common case.
+
+    We accept BOTH ranges and rely on HLTV's `result-score` /
+    `score-won/lost/tied` classes to identify the right digits. The
+    upper bound is a generous 35 — well above any realistic CS2 score
+    even with extreme OT, but tight enough to filter junk numbers like
+    HLTV team rankings (often 30+) or random page metadata.
+
+    Strategy 1: ``result-score`` container with ``score-won/lost/tied``.
+    Strategy 2: any ``score-won/lost/tied`` element in the row.
+    Strategy 3: explicit ``N - M`` text pattern (both 0..35).
     """
-    # Plausible series scores: 0..5 (max series length is Bo9 = 5-4).
-    MAX_PLAUSIBLE = 5
+    # Wide upper bound — covers Bo1 multi-OT scores. CS2 OT is MR3 per
+    # half so each OT adds 3 to the cap (15, 18, 21, 24, 27...).
+    # 35 is well over any plausible match.
+    MAX_PLAUSIBLE = 35
 
-    # Strategy 1: result-score container
+    # Strategy 1: result-score container (most reliable on Bo3/Bo5)
     score_container = row.find(class_=re.compile(r"\bresult-score\b", re.I))
     if score_container:
         digits = []
@@ -372,7 +386,8 @@ def _extract_scores(row) -> tuple[int | None, int | None]:
         if len(digits) >= 2:
             return digits[0], digits[1]
 
-    # Strategy 2: any score-won/lost/tied element
+    # Strategy 2: any score-won/lost/tied element (covers Bo1 layouts
+    # where the score isn't wrapped in a result-score container)
     digits = []
     for el in row.find_all(class_=re.compile(r"\bscore-(won|lost|tied)\b", re.I)):
         text = el.get_text(strip=True)
@@ -381,14 +396,15 @@ def _extract_scores(row) -> tuple[int | None, int | None]:
     if len(digits) >= 2:
         return digits[0], digits[1]
 
-    # Strategy 3: text fallback — look for "N - M" or "N:M" pattern
-    # explicitly, restricted to single digits 0-5. We DON'T accept just
-    # any two numbers because every row has stars (1-5), team rankings
-    # (1-30+), and various other digits that pollute the pool.
+    # Strategy 3: explicit "N - M" pattern in text. Two-digit allowed
+    # so Bo1s like "22 - 19" still match. The dash/colon requirement
+    # keeps us from picking up unrelated number pairs.
     all_text = row.get_text(" ", strip=True)
-    m = re.search(r"\b([0-5])\s*[-:–]\s*([0-5])\b", all_text)
+    m = re.search(r"\b(\d{1,2})\s*[-:–]\s*(\d{1,2})\b", all_text)
     if m:
-        return int(m.group(1)), int(m.group(2))
+        a, b = int(m.group(1)), int(m.group(2))
+        if a <= MAX_PLAUSIBLE and b <= MAX_PLAUSIBLE:
+            return a, b
 
     return None, None
 
