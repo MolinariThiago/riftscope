@@ -3085,8 +3085,12 @@ class ParseQualityError(ValueError):
 # Defaults match competitive CS2 (MR12 = first to 13, always 5v5).
 import os as _os
 
-_MIN_VALID_ROUNDS = int(_os.environ.get("PARSE_MIN_ROUNDS", "13"))
-_MIN_VALID_PLAYERS = int(_os.environ.get("PARSE_MIN_PLAYERS", "10"))
+# Lowered from 13/10 to 6/8 so we accept forfeits (Bo1 ending 6-0),
+# short overtime-less Bo1s, and standard 5v5 demos where one player
+# briefly dropped (gives players=9). Pure-junk demos (warmup-only,
+# knife rounds, recording started mid-match) still get rejected.
+_MIN_VALID_ROUNDS = int(_os.environ.get("PARSE_MIN_ROUNDS", "6"))
+_MIN_VALID_PLAYERS = int(_os.environ.get("PARSE_MIN_PLAYERS", "8"))
 
 
 def _validate_parse_quality(
