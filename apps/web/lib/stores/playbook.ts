@@ -122,6 +122,8 @@ interface PlaybookState {
 
   // ---- entity actions ----
   addEntity: (kind: EntityKind, team?: Team) => void;
+  /** Drop a new entity directly at the given normalized position — no placement mode. */
+  addEntityAt: (kind: EntityKind, team: Team | undefined, pos: Vec2) => void;
   addPlayers: (team: Team, n: number) => void;
   rotateEntity: (id: string, deltaDeg: number) => void;
   removeEntity: (id: string) => void;
@@ -285,6 +287,43 @@ export const usePlaybook = create<PlaybookState>((set, get) => {
         })),
         selectedEntityId: entity.id,
         placingId: entity.id, // follows the cursor until the user clicks to drop
+        tool: "select",
+        dirty: true,
+      });
+    },
+
+    addEntityAt: (kind, team, pos) => {
+      // Drag-and-drop entry point: create entity already positioned at the
+      // drop point. No placement mode, no click-to-confirm — the drop IS
+      // the confirmation. Position is normalized [0,1] and is applied to
+      // every frame so the entity exists at the same spot in each step
+      // (the user can then move it per-frame to animate movement).
+      const { entities, frames } = get();
+      const sameGroup = entities.filter(
+        (e) => e.kind === kind && (kind !== "player" || e.team === team),
+      ).length;
+      const label =
+        kind === "player" ? String(sameGroup + 1) : kind.toUpperCase();
+      const entity: BoardEntity = {
+        id: uid(),
+        kind,
+        team,
+        label,
+        radiusWorld: UTILITY_RADIUS[kind],
+        rot: kind === "player" ? 0 : undefined,
+      };
+      const clampedPos: Vec2 = {
+        x: Math.max(0, Math.min(1, pos.x)),
+        y: Math.max(0, Math.min(1, pos.y)),
+      };
+      set({
+        entities: [...entities, entity],
+        frames: frames.map((f) => ({
+          ...f,
+          positions: { ...f.positions, [entity.id]: { ...clampedPos } },
+        })),
+        selectedEntityId: entity.id,
+        placingId: null,
         tool: "select",
         dirty: true,
       });

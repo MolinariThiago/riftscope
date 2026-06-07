@@ -50,6 +50,20 @@ export interface TacticalBoardHandle {
   screenshot: () => Promise<void>;
   /** Interpolate the whole sequence to a normalized time (0..1) — used by the scrubber. */
   seek: (t01: number) => void;
+  /**
+   * Convert a screen point (browser client coords) into a normalized [0,1]
+   * board position. Returns null when the point is outside the board's
+   * actual canvas bounds — used by the drag-and-drop drop handler to
+   * cancel drops that land outside the map.
+   */
+  screenToBoardPos: (clientX: number, clientY: number) => Vec2 | null;
+  /**
+   * Animate a transition from the currently displayed frame to ``toFrameId``
+   * over ``durationMs``. Lerps positions only; strokes and hidden flags
+   * snap to the target at the end via setCurrentFrame. Works in both
+   * directions (forward or backward through the step list).
+   */
+  animateToFrame: (toFrameId: string, durationMs: number) => void;
 }
 
 interface Props {
@@ -262,6 +276,90 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
           }
         },
         seek: (t01: number) => applyAt(t01),
+        screenToBoardPos: (clientX: number, clientY: number) => {
+          // Reject points that land outside the actual canvas bounds —
+          // dropping a player outside the map should cancel, not snap to
+          // the edge.
+          const a = appRef.current;
+          const v = vpRef.current;
+          if (!a || !v) return null;
+          const rect = a.canvas.getBoundingClientRect();
+          if (
+            clientX < rect.left ||
+            clientX > rect.right ||
+            clientY < rect.top ||
+            clientY > rect.bottom
+          ) {
+            return null;
+          }
+          const localX = clientX - rect.left;
+          const localY = clientY - rect.top;
+          const world = v.toWorld(localX, localY);
+          const rs = stateRef.current.radarSize;
+          // Only accept drops INSIDE the actual radar bounds — if the user
+          // drops in the dark border area outside the map image, cancel.
+          if (world.x < 0 || world.x > rs || world.y < 0 || world.y > rs) {
+            return null;
+          }
+          return { x: world.x / rs, y: world.y / rs };
+        },
+        animateToFrame: (toFrameId: string, durationMs: number) => {
+          const app = appRef.current;
+          if (!app) return;
+          const fr = framesRef.current;
+          const toFrame = fr.find((f) => f.id === toFrameId);
+          if (!toFrame) return;
+
+          // Snapshot the CURRENT on-screen positions (could be mid-animation
+          // or static from forceRedraw) so we lerp from where things ACTUALLY
+          // are, not from the conceptual "current frame".
+          const rs = stateRef.current.radarSize;
+          const nodes = nodesRef.current;
+          const from: Record<string, Vec2> = {};
+          for (const e of entitiesRef.current) {
+            const node = nodes.get(e.id);
+            if (node) {
+              from[e.id] = { x: node.position.x / rs, y: node.position.y / rs };
+            }
+          }
+
+          // Cancel any prior animation.
+          if (animRef.current) {
+            try { app.ticker.remove(animRef.current); } catch { /* */ }
+            animRef.current = null;
+          }
+
+          let elapsed = 0;
+          const tick = () => {
+            elapsed += app.ticker.deltaMS;
+            const u = easeInOut(Math.max(0, Math.min(1, elapsed / Math.max(1, durationMs))));
+            for (const e of entitiesRef.current) {
+              const node = nodes.get(e.id);
+              if (!node) continue;
+              const pa = from[e.id];
+              const pb = toFrame.positions[e.id];
+              if (pa && pb) {
+                node.position.set(
+                  lerp(pa.x, pb.x, u) * rs,
+                  lerp(pa.y, pb.y, u) * rs,
+                );
+              } else if (pb) {
+                node.position.set(pb.x * rs, pb.y * rs);
+              }
+            }
+            app.renderer.render(app.stage);
+            if (elapsed >= durationMs) {
+              try { app.ticker.remove(tick); } catch { /* */ }
+              animRef.current = null;
+              // Commit: switching frames triggers forceRedraw which paints
+              // the new frame's strokes & hidden flags AND lands positions
+              // exactly on the target (no rounding drift from the lerp).
+              usePlaybook.getState().setCurrentFrame(toFrameId);
+            }
+          };
+          animRef.current = tick;
+          app.ticker.add(tick);
+        },
       });
       forceRedraw();
     })();
@@ -580,6 +678,9 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
   const dragRef = useRef<{ entityId: string; node: Container; grabOffset: Vec2 } | null>(null);
   const drawRef = useRef<{ tool: "pen" | "arrow" | "rect" | "circle"; pts: Vec2[] } | null>(null);
   const shiftRef = useRef(false);
+  // Ticker callback for the per-frame transition animation. Stored in a ref
+  // so a follow-up animateToFrame can cancel an in-flight one.
+  const animRef = useRef<(() => void) | null>(null);
 
   function onStagePointerDown(e: any) {
     const vp = vpRef.current;

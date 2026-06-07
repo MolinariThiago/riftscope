@@ -5,14 +5,13 @@ import dynamic from "next/dynamic";
 import { Loader2, Save, FilePlus2, FolderOpen, Trash2, Check } from "lucide-react";
 
 import { TacticsToolbar } from "@/components/tactics/TacticsToolbar";
-import { FrameTimeline } from "@/components/tactics/FrameTimeline";
 import { ZoomControls } from "@/components/tactics/ZoomControls";
 import type { TacticalBoardHandle } from "@/components/tactics/TacticalBoard";
 import { usePlaybook } from "@/lib/stores/playbook";
 import { useMapMeta } from "@/lib/hooks/useMaps";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { PlaybookSummary, Team, TeamInfo } from "@/types/playbook";
+import type { EntityKind, PlaybookSummary, Team, TeamInfo } from "@/types/playbook";
 
 // Pixi/WebGL board is browser-only.
 const TacticalBoard = dynamic(
@@ -320,25 +319,43 @@ export default function TacticsPage() {
         </div>
       </header>
 
-      {/* Board area */}
-      <div className={cn("relative flex-1 min-h-0", placingId && "cursor-crosshair")}>
+      {/* Board area — drop target for drag-and-drop placement */}
+      <div
+        className={cn("relative flex-1 min-h-0", placingId && "cursor-crosshair")}
+        onDragOver={(e) => {
+          // Required for onDrop to fire. We only accept our own payload.
+          if (e.dataTransfer.types.includes("application/x-riftscope-entity")) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+          }
+        }}
+        onDrop={(e) => {
+          const raw = e.dataTransfer.getData("application/x-riftscope-entity");
+          if (!raw || !board) return;
+          e.preventDefault();
+          let payload: { kind: EntityKind; team?: Team };
+          try {
+            payload = JSON.parse(raw);
+          } catch {
+            return;
+          }
+          // Convert browser screen coords → normalized board coords. Returns
+          // null when the drop landed outside the radar bounds — in that
+          // case we cancel (do nothing), per the user's choice.
+          const pos = board.screenToBoardPos(e.clientX, e.clientY);
+          if (!pos) return;
+          usePlaybook.getState().addEntityAt(payload.kind, payload.team, pos);
+        }}
+      >
         <TacticalBoard mapMeta={mapMeta} mapName={map} onReady={setBoard} />
-
-        {/* Placement hint */}
-        {placingId && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-            <div className="px-3 py-1.5 rounded-lg border border-primary/40 bg-background/90 backdrop-blur-sm text-xs font-mono-rs text-primary">
-              Click para ubicar · Esc para cancelar
-            </div>
-          </div>
-        )}
 
         {/* Empty-state hint — minimal, only shown when truly empty */}
         {entities.length === 0 && (
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
             <div className="text-center px-5 py-3 rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm">
               <p className="text-xs text-muted-foreground">
-                Tocá <span className="text-primary font-semibold">5v5</span> abajo para arrancar
+                Arrastrá un jugador, granada o C4 al mapa — o tocá{" "}
+                <span className="text-primary font-semibold">5v5</span> abajo para arrancar
               </p>
             </div>
           </div>
@@ -347,11 +364,6 @@ export default function TacticsPage() {
         {/* Zoom rail — top left */}
         <div className="absolute top-3 left-3 z-10 pointer-events-auto">
           <ZoomControls board={board} />
-        </div>
-
-        {/* Frame timeline — top right (compact, doesn't compete with toolbar) */}
-        <div className="absolute top-3 right-3 z-10 pointer-events-auto">
-          <FrameTimeline board={board} />
         </div>
 
         {/* Main toolbar — bottom centered (cs2.cam-style) */}

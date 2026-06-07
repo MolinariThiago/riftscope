@@ -1,12 +1,13 @@
 "use client";
 
-// Horizontal toolbar — cs2.cam style.
-// Layout (single row, bottom of the screen):
+// Horizontal toolbar — cs2.cam style + drag-and-drop placement.
+// Every "Add to board" item (utilities, players, bomb) is a drag source.
+// You drag the icon onto the map; the drop position becomes the spawn
+// position. Drops outside the map are cancelled.
 //
-//   [map | pen | trash | rect | circle | layer]  [util icons]
-//   [color CT/T/yellow]  [C4]  [frames 1·2·3·4]  [reset]  [undo redo]
-//
-// Goal: maximise map space, every tool one click away, no nested menus.
+// Frame buttons trigger an animated 1.5s transition via the board's
+// animateToFrame handle — clicking a frame plays back the movement
+// instead of snapping.
 
 import {
   MousePointer2,
@@ -24,7 +25,7 @@ import {
 } from "lucide-react";
 
 import { usePlaybook } from "@/lib/stores/playbook";
-import type { DrawTool, EntityKind } from "@/types/playbook";
+import type { DrawTool, EntityKind, Team } from "@/types/playbook";
 import { cn } from "@/lib/utils";
 import type { TacticalBoardHandle } from "./TacticalBoard";
 
@@ -45,17 +46,26 @@ const UTILITIES: { kind: EntityKind; src: string; label: string }[] = [
   { kind: "decoy", src: "/weapons/decoy.svg", label: "Decoy" },
 ];
 
-// Colour swatches — CT blue, T orange, plus the brand burgundy + accents
-const COLOR_SWATCHES: { value: number; label: string; ring: string }[] = [
-  { value: 0x4a9eff, label: "CT", ring: "#4a9eff" },
-  { value: 0xffb347, label: "T", ring: "#ffb347" },
-  { value: 0xffe066, label: "Amarillo", ring: "#ffe066" },
-  { value: 0x22c55e, label: "Verde", ring: "#22c55e" },
-  { value: 0xff4d6d, label: "Rosa", ring: "#ff4d6d" },
-  { value: 0xffffff, label: "Blanco", ring: "#ffffff" },
+const COLOR_SWATCHES: { value: number; label: string }[] = [
+  { value: 0x4a9eff, label: "CT" },
+  { value: 0xffb347, label: "T" },
+  { value: 0xffe066, label: "Amarillo" },
+  { value: 0x22c55e, label: "Verde" },
+  { value: 0xff4d6d, label: "Rosa" },
+  { value: 0xffffff, label: "Blanco" },
 ];
 
-export function TacticsToolbar({ board: _board }: { board: TacticalBoardHandle | null }) {
+// Default per-step transition duration when clicking a frame button.
+const FRAME_TRANSITION_MS = 1500;
+
+// Payload encoded in dataTransfer when dragging a board item.
+type DragPayload = { kind: EntityKind; team?: Team };
+
+function encodeDrag(p: DragPayload): string {
+  return JSON.stringify(p);
+}
+
+export function TacticsToolbar({ board }: { board: TacticalBoardHandle | null }) {
   const tool = usePlaybook((s) => s.tool);
   const color = usePlaybook((s) => s.color);
   const frames = usePlaybook((s) => s.frames);
@@ -65,17 +75,26 @@ export function TacticsToolbar({ board: _board }: { board: TacticalBoardHandle |
 
   const setTool = usePlaybook((s) => s.setTool);
   const setColor = usePlaybook((s) => s.setColor);
-  const addEntity = usePlaybook((s) => s.addEntity);
   const addPlayers = usePlaybook((s) => s.addPlayers);
-  const setCurrentFrame = usePlaybook((s) => s.setCurrentFrame);
   const addFrame = usePlaybook((s) => s.addFrame);
   const undo = usePlaybook((s) => s.undo);
   const redo = usePlaybook((s) => s.redo);
   const clearAll = usePlaybook((s) => s.clearAll);
 
+  // Frame click — animate via the board instead of snapping. Falls back to
+  // a plain frame switch if the board isn't mounted yet (e.g. very early
+  // mount race) so nothing is lost.
+  const goToFrame = (id: string) => {
+    if (!board || id === currentFrameId) {
+      usePlaybook.getState().setCurrentFrame(id);
+      return;
+    }
+    board.animateToFrame(id, FRAME_TRANSITION_MS);
+  };
+
   return (
     <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-surface/95 backdrop-blur-xl px-3 py-2 shadow-2xl">
-      {/* === Drawing tools === */}
+      {/* === Drawing tools (click-to-activate) === */}
       <ToolGroup>
         {TOOLS.map((t) => (
           <IconBtn
@@ -91,24 +110,19 @@ export function TacticsToolbar({ board: _board }: { board: TacticalBoardHandle |
 
       <Divider />
 
-      {/* === Utilities === */}
+      {/* === Utilities (drag-to-place) === */}
       <ToolGroup>
         {UTILITIES.map((u) => (
-          <UtilBtn
-            key={u.kind}
-            src={u.src}
-            label={u.label}
-            onClick={() => addEntity(u.kind)}
-          />
+          <DragUtilBtn key={u.kind} kind={u.kind} src={u.src} label={u.label} />
         ))}
       </ToolGroup>
 
       <Divider />
 
-      {/* === Players (quick add) === */}
+      {/* === Players (drag-to-place + Quick 5v5) === */}
       <ToolGroup>
-        <PlayerBtn label="CT" tint="#4a9eff" onClick={() => addEntity("player", "ct")} />
-        <PlayerBtn label="T" tint="#ffb347" onClick={() => addEntity("player", "tt")} />
+        <DragPlayerBtn team="ct" label="CT" tint="#4a9eff" />
+        <DragPlayerBtn team="tt" label="T" tint="#ffb347" />
         <button
           onClick={() => {
             addPlayers("ct", 5);
@@ -143,23 +157,17 @@ export function TacticsToolbar({ board: _board }: { board: TacticalBoardHandle |
 
       <Divider />
 
-      {/* === Bomb === */}
-      <button
-        onClick={() => addEntity("bomb")}
-        title="C4 / Bomba"
-        className="h-9 w-9 flex items-center justify-center rounded-lg border border-border/60 bg-surface-elevated/40 text-loss hover:bg-loss/10 hover:border-loss/40 transition-colors"
-      >
-        <Bomb size={16} />
-      </button>
+      {/* === Bomb (drag-to-place) === */}
+      <DragBombBtn />
 
       <Divider />
 
-      {/* === Frames === */}
+      {/* === Frames (click animates 1.5s) === */}
       <ToolGroup>
         {frames.map((f, i) => (
           <button
             key={f.id}
-            onClick={() => setCurrentFrame(f.id)}
+            onClick={() => goToFrame(f.id)}
             title={f.name ?? `Paso ${i + 1}`}
             className={cn(
               "h-9 min-w-[2.25rem] px-2 rounded-lg border text-xs font-mono-rs font-bold transition-colors",
@@ -239,33 +247,60 @@ function IconBtn({
   );
 }
 
-function UtilBtn({ src, label, onClick }: { src: string; label: string; onClick: () => void }) {
+// ---------------------------------------------------------------------------
+// Drag sources — utilities / players / bomb
+// ---------------------------------------------------------------------------
+function setDragData(e: React.DragEvent<HTMLElement>, payload: DragPayload) {
+  e.dataTransfer.setData("application/x-riftscope-entity", encodeDrag(payload));
+  e.dataTransfer.effectAllowed = "copy";
+}
+
+function DragUtilBtn({ kind, src, label }: { kind: EntityKind; src: string; label: string }) {
   return (
     <button
-      onClick={onClick}
-      title={`Agregar ${label}`}
-      className="h-9 w-9 flex items-center justify-center rounded-lg border border-border/60 bg-surface-elevated/40 hover:bg-surface-elevated hover:border-primary/40 transition-colors"
+      draggable
+      onDragStart={(e) => setDragData(e, { kind })}
+      title={`Arrastrá ${label} al mapa`}
+      className="h-9 w-9 flex items-center justify-center rounded-lg border border-border/60 bg-surface-elevated/40 hover:bg-surface-elevated hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={src}
         alt={label}
-        className="h-5 w-5 object-contain"
+        className="h-5 w-5 object-contain pointer-events-none select-none"
         style={{ filter: "brightness(0) invert(1)" }}
+        draggable={false}
       />
     </button>
   );
 }
 
-function PlayerBtn({ label, tint, onClick }: { label: string; tint: string; onClick: () => void }) {
+function DragPlayerBtn({ team, label, tint }: { team: Team; label: string; tint: string }) {
   return (
     <button
-      onClick={onClick}
-      title={`Agregar jugador ${label}`}
-      className="h-9 px-2.5 flex items-center gap-1.5 rounded-lg border border-border/60 bg-surface-elevated/40 hover:bg-surface-elevated transition-colors"
+      draggable
+      onDragStart={(e) => setDragData(e, { kind: "player", team })}
+      title={`Arrastrá un jugador ${label} al mapa`}
+      className="h-9 px-2.5 flex items-center gap-1.5 rounded-lg border border-border/60 bg-surface-elevated/40 hover:bg-surface-elevated transition-colors cursor-grab active:cursor-grabbing"
     >
-      <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-white" style={{ background: tint }} />
-      <span className="text-xs font-bold" style={{ color: tint }}>{label}</span>
+      <span
+        className="inline-block h-3.5 w-3.5 rounded-full border-2 border-white pointer-events-none"
+        style={{ background: tint }}
+      />
+      <span className="text-xs font-bold pointer-events-none" style={{ color: tint }}>{label}</span>
+    </button>
+  );
+}
+
+function DragBombBtn() {
+  return (
+    <button
+      draggable
+      onDragStart={(e) => setDragData(e, { kind: "bomb" })}
+      title="Arrastrá la C4 al mapa"
+      className="h-9 w-9 flex items-center justify-center rounded-lg border border-border/60 bg-surface-elevated/40 text-loss hover:bg-loss/10 hover:border-loss/40 transition-colors cursor-grab active:cursor-grabbing"
+    >
+      <Bomb size={16} className="pointer-events-none" />
     </button>
   );
 }
