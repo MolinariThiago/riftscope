@@ -817,3 +817,133 @@ async def admin_backfill_logos(
 
     db.commit()
     return {"updated": updated, "scraped": len(matches)}
+
+
+@router.post("/pro/wipe-all")
+def admin_wipe_all_pro(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Nuclear option — delete EVERY pro-match and its associated demo.
+
+    Wipes (in order, respecting FK constraints):
+      1. DemoKill / DemoRound / DemoPlayer / DemoInsight / RoundTactic
+         rows linked to any Demo that belongs to a ProMatch.
+      2. Demo rows linked to any ProMatch.
+      3. ProMatch rows.
+      4. Best-effort: deletes the S3 objects and local files for those
+         demos (failures here are logged but don't block the DB wipe).
+
+    The pro-import scheduler will start re-discovering matches from HLTV
+    on its next tick. User-uploaded demos (those without a pro_match_id)
+    are NOT touched.
+
+    Returns counts of what was deleted so the operator can sanity-check.
+    """
+    from db.models.demo import DemoKill, DemoRound, DemoPlayer
+    from db.models.insight import DemoInsight
+    from db.models.pro_match import ProMatch
+    from db.models.round_tactic import RoundTactic
+    from services.storage import UPLOAD_DIR, get_storage
+
+    # --- 1. Collect every Demo that belongs to a ProMatch -----------
+    pro_demos = db.query(Demo).filter(Demo.pro_match_id.isnot(None)).all()
+    demo_ids = [d.id for d in pro_demos]
+    storage_filenames = [
+        d.storage_filename for d in pro_demos if d.storage_filename
+    ]
+
+    counts = {
+        "pro_matches": 0,
+        "demos": 0,
+        "demo_players": 0,
+        "demo_rounds": 0,
+        "demo_kills": 0,
+        "demo_insights": 0,
+        "round_tactics": 0,
+        "files_deleted_local": 0,
+        "files_deleted_s3": 0,
+        "files_delete_errors": 0,
+    }
+
+    if demo_ids:
+        # --- 2. Cascade-delete child rows by demo_id ----------------
+        counts["demo_kills"] = (
+            db.query(DemoKill)
+            .filter(DemoKill.demo_id.in_(demo_ids))
+            .delete(synchronize_session=False)
+        )
+        counts["demo_rounds"] = (
+            db.query(DemoRound)
+            .filter(DemoRound.demo_id.in_(demo_ids))
+            .delete(synchronize_session=False)
+        )
+        counts["demo_players"] = (
+            db.query(DemoPlayer)
+            .filter(DemoPlayer.demo_id.in_(demo_ids))
+            .delete(synchronize_session=False)
+        )
+        counts["demo_insights"] = (
+            db.query(DemoInsight)
+            .filter(DemoInsight.demo_id.in_(demo_ids))
+            .delete(synchronize_session=False)
+        )
+        counts["round_tactics"] = (
+            db.query(RoundTactic)
+            .filter(RoundTactic.demo_id.in_(demo_ids))
+            .delete(synchronize_session=False)
+        )
+
+    # --- 3. Clear ProMatch.demo_id FKs before deleting Demos --------
+    # ProMatch has demo_id NOT NULL constraint in some DBs — clear it
+    # first so the Demo delete doesn't trip an FK violation.
+    db.query(ProMatch).filter(ProMatch.demo_id.isnot(None)).update(
+        {ProMatch.demo_id: None}, synchronize_session=False,
+    )
+
+    # --- 4. Delete the Demo rows themselves -------------------------
+    if demo_ids:
+        counts["demos"] = (
+            db.query(Demo)
+            .filter(Demo.id.in_(demo_ids))
+            .delete(synchronize_session=False)
+        )
+
+    # --- 5. Delete the ProMatch rows --------------------------------
+    counts["pro_matches"] = db.query(ProMatch).delete(synchronize_session=False)
+
+    db.commit()
+
+    # --- 6. Best-effort storage cleanup -----------------------------
+    # Local FS
+    for fname in storage_filenames:
+        try:
+            path = UPLOAD_DIR / fname
+            if path.exists():
+                path.unlink()
+                counts["files_deleted_local"] += 1
+        except Exception:
+            counts["files_delete_errors"] += 1
+            logger.exception("failed to delete local file %s", fname)
+
+    # S3 / R2
+    storage = get_storage()
+    if hasattr(storage, "delete_demo"):
+        for fname in storage_filenames:
+            try:
+                if storage.delete_demo(fname):
+                    counts["files_deleted_s3"] += 1
+            except Exception:
+                counts["files_delete_errors"] += 1
+                logger.exception("failed to delete remote object %s", fname)
+
+    logger.warning(
+        "admin wipe-all: deleted %d ProMatch(es), %d Demo(s), "
+        "%d files (local=%d, S3=%d, errors=%d)",
+        counts["pro_matches"], counts["demos"],
+        counts["files_deleted_local"] + counts["files_deleted_s3"],
+        counts["files_deleted_local"], counts["files_deleted_s3"],
+        counts["files_delete_errors"],
+    )
+
+    return counts
