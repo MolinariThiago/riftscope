@@ -27,64 +27,64 @@ type Feature = {
 const features: Feature[] = [
   {
     icon: Map,
-    title: "Interactive Heatmaps",
-    desc: "Kill locations, smokes, flashes and movement paths plotted directly on the map.",
+    title: "Heatmaps interactivos",
+    desc: "Ubicaciones de kills, humos, flashes y caminos de movimiento renderizados directamente sobre el mapa.",
     color: "text-primary",
     bg: "bg-primary-dim",
   },
   {
     icon: Clock,
-    title: "Round Timeline",
-    desc: "Playback every round with per-second accuracy — kills, plants and utility at a glance.",
+    title: "Timeline por ronda",
+    desc: "Reproducí cada ronda con precisión por segundo — kills, planteos y utilidad de un vistazo.",
     color: "text-accent",
     bg: "bg-accent/10",
   },
   {
     icon: BarChart3,
-    title: "Advanced Player Stats",
-    desc: "ADR, KAST, HS%, Rating 2.0, opening duels, multi-kills and clutch performance.",
+    title: "Stats avanzados",
+    desc: "ADR, KAST, HS%, Rating 2.0, duelos de apertura, multi-kills y rendimiento en clutches.",
     color: "text-win",
     bg: "bg-win/10",
   },
   {
     icon: DollarSign,
-    title: "Economy Analysis",
-    desc: "Track team economy per round: full buy, eco, force buy and money management.",
+    title: "Análisis económico",
+    desc: "Seguí la economía del equipo por ronda: full buy, eco, force buy y manejo del dinero.",
     color: "text-tt",
     bg: "bg-tt-dim",
   },
   {
     icon: Target,
-    title: "Entry Kills & Openings",
-    desc: "Identify your best entry fraggers and first-blood impact on round outcomes.",
-    color: "text-kill",
-    bg: "bg-kill/10",
+    title: "Entradas y aperturas",
+    desc: "Identificá a tus mejores entry fraggers y el impacto del first blood en los resultados de ronda.",
+    color: "text-primary",
+    bg: "bg-primary-dim",
   },
   {
     icon: Shield,
-    title: "Clutch Performance",
-    desc: "All 1vX situations tracked: success rate, conditions and high-impact moments.",
+    title: "Rendimiento en clutch",
+    desc: "Todas las situaciones 1vX rastreadas: tasa de éxito, condiciones y momentos de alto impacto.",
     color: "text-ct",
     bg: "bg-ct-dim",
   },
   {
     icon: Flame,
-    title: "Utility Analysis",
-    desc: "Smoke effectiveness, flash assists, HE damage dealt and Molotov zone control.",
+    title: "Análisis de utilidad",
+    desc: "Efectividad de humos, flash assists, daño de HE y control de zona con molotovs.",
     color: "text-primary",
     bg: "bg-primary-dim",
   },
   {
     icon: ScanSearch,
-    title: "Player Search & Compare",
-    desc: "Find any player across your demos and compare two players side-by-side.",
+    title: "Buscador de jugadores",
+    desc: "Encontrá cualquier jugador en tus demos y compará a dos jugadores lado a lado.",
     color: "text-accent",
     bg: "bg-accent/10",
   },
   {
     icon: Award,
-    title: "Match Rating",
-    desc: "Team and individual performance ratings with context-aware impact scoring.",
+    title: "Rating por partido",
+    desc: "Ratings de rendimiento individual y por equipo con scoring de impacto contextual.",
     color: "text-win",
     bg: "bg-win/10",
   },
@@ -92,18 +92,19 @@ const features: Feature[] = [
 
 export function LandingFeatures() {
   return (
-    <section id="features" className="py-24 px-6 border-t border-border/50">
+    <section id="features" className="py-24 px-6 border-t border-border/30">
       <div className="max-w-6xl mx-auto">
         <div className="max-w-2xl mb-12">
-          <div className="text-xs font-mono-rs tracking-wider text-muted-foreground uppercase mb-3">
-            Feature set
+          <div className="inline-flex items-center gap-2 mb-3 text-[11px] font-mono-rs uppercase tracking-wider text-primary">
+            <span className="h-px w-8 bg-primary" />
+            FUNCIONES
           </div>
           <h2 className="text-3xl lg:text-4xl font-display font-bold mb-3">
-            Every stat that <span className="gradient-text">matters.</span>
+            Cada dato que <span className="gradient-text">importa.</span>
           </h2>
           <p className="text-muted-foreground text-lg">
-            From raw kills to strategic patterns — RIFTSCOPE extracts the
-            intelligence you need to improve.
+            De kills crudos a patrones estratégicos — RIFTSCOPE extrae la
+            inteligencia que necesitás para mejorar.
           </p>
         </div>
 

@@ -9,15 +9,15 @@ const CT = "hsl(213 100% 65%)";
 const TT = "hsl(33 100% 64%)";
 
 const bullets: { icon: LucideIcon; title: string; desc: string }[] = [
-  { icon: Map, title: "2D tactical map", desc: "Every player, rendered on an accurate top-down radar of the map." },
-  { icon: Clock, title: "Per-second timeline", desc: "Scrub any round and watch kills, utility and rotations play out." },
-  { icon: Crosshair, title: "Kills, nades & bomb", desc: "Smokes, flashes, molotovs, plants and defuses — all on the map." },
-  { icon: FileCheck, title: "Any .dem file", desc: "Drop a matchmaking, FACEIT or pro demo. No plugins required." },
+  { icon: Map, title: "Mapa táctico 2D", desc: "Cada jugador renderizado en un radar top-down preciso del mapa." },
+  { icon: Clock, title: "Timeline por segundo", desc: "Avanzá cualquier ronda y mirá kills, utilidad y rotaciones en tiempo real." },
+  { icon: Crosshair, title: "Kills, granadas y bomba", desc: "Humos, flashes, molotovs, planteos y defuses — todo sobre el mapa." },
+  { icon: FileCheck, title: "Cualquier archivo .dem", desc: "Arrastrá un demo de matchmaking, FACEIT o pro. Sin plugins." },
 ];
 
 export function LandingReplayShowcase() {
   return (
-    <section id="replay" className="py-24 px-6 border-t border-border/50">
+    <section id="replay" className="py-24 px-6 border-t border-border/30">
       <div className="max-w-6xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
         {/* Copy */}
         <motion.div
@@ -30,21 +30,21 @@ export function LandingReplayShowcase() {
             variants={fadeUp}
             className="inline-flex items-center gap-2 mb-4 text-[11px] font-mono-rs uppercase tracking-wider text-primary"
           >
-            <span className="h-1 w-6 bg-primary" />
-            R03 · CORE ANALYSIS
+            <span className="h-px w-8 bg-primary" />
+            ANÁLISIS PRINCIPAL
           </motion.span>
           <motion.h2 variants={fadeUp} className="text-3xl lg:text-4xl font-display font-bold mb-4">
-            Replay every round, <span className="gradient-text">in 2D.</span>
+            Revivir cada ronda, <span className="gradient-text">en 2D.</span>
           </motion.h2>
           <motion.p variants={fadeUp} className="text-muted-foreground text-lg mb-8 max-w-md">
-            RIFTSCOPE turns your raw demo into an interactive tactical replay —
-            so you can see exactly how each round was won or lost.
+            RIFTSCOPE convierte tu demo en un replay táctico interactivo —
+            para que veas exactamente cómo se ganó o perdió cada ronda.
           </motion.p>
 
           <motion.div variants={staggerContainer(0.08)} className="space-y-5">
             {bullets.map((b) => (
               <motion.div key={b.title} variants={fadeUp} className="flex gap-4">
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary-dim/40">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary-dim/60">
                   <b.icon size={18} className="text-primary" />
                 </div>
                 <div>
@@ -72,12 +72,12 @@ export function LandingReplayShowcase() {
 
 function ReplayPanel() {
   return (
-    <div className="glass-card rounded-2xl overflow-hidden">
+    <div className="glass-card rounded-2xl overflow-hidden shadow-2xl shadow-primary/5">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border/40">
         <div>
-          <div className="text-[10px] text-muted-foreground font-mono-rs leading-none">2D REPLAY</div>
-          <div className="font-display font-bold text-sm leading-tight mt-0.5">de_mirage · Round 18</div>
+          <div className="text-[10px] text-muted-foreground font-mono-rs leading-none">VISOR 2D</div>
+          <div className="font-display font-bold text-sm leading-tight mt-0.5">de_mirage · Ronda 18</div>
         </div>
         <div className="flex items-center gap-3 text-xs font-mono-rs">
           <span className="text-ct font-bold">9</span>
@@ -87,43 +87,40 @@ function ReplayPanel() {
       </div>
 
       {/* Map */}
-      <div className="relative h-[300px] bg-[hsl(220_18%_6%)]">
-        <div className="absolute inset-0 map-grid opacity-70" />
+      <div className="relative h-[300px] bg-[hsl(240_10%_4%)]">
+        <div className="absolute inset-0 map-grid opacity-50" />
 
         <svg viewBox="0 0 400 300" className="absolute inset-0 h-full w-full" preserveAspectRatio="xMidYMid slice">
-          <g stroke="hsl(185 100% 52% / 0.16)" strokeWidth="1.4" fill="hsl(185 100% 52% / 0.04)">
+          <g stroke="hsl(350 70% 33% / 0.20)" strokeWidth="1.4" fill="hsl(350 70% 33% / 0.04)">
             <rect x="40" y="36" width="120" height="84" rx="8" />
             <rect x="248" y="46" width="110" height="74" rx="8" />
             <rect x="158" y="138" width="86" height="110" rx="8" />
             <rect x="44" y="150" width="86" height="58" rx="8" />
           </g>
-          <text x="100" y="84" fill="hsl(185 100% 52% / 0.35)" fontSize="20" fontFamily="monospace" textAnchor="middle">A</text>
-          <text x="303" y="90" fill="hsl(185 100% 52% / 0.35)" fontSize="20" fontFamily="monospace" textAnchor="middle">B</text>
-          {/* dashed connectors */}
-          <path d="M100 120 L100 150 M205 120 L205 138 M205 248 L205 268" stroke="hsl(185 100% 52% / 0.16)" strokeWidth="1.1" strokeDasharray="4 4" fill="none" />
+          <text x="100" y="84" fill="hsl(350 70% 33% / 0.30)" fontSize="20" fontFamily="monospace" textAnchor="middle">A</text>
+          <text x="303" y="90" fill="hsl(350 70% 33% / 0.30)" fontSize="20" fontFamily="monospace" textAnchor="middle">B</text>
+          <path d="M100 120 L100 150 M205 120 L205 138 M205 248 L205 268" stroke="hsl(350 70% 33% / 0.16)" strokeWidth="1.1" strokeDasharray="4 4" fill="none" />
         </svg>
 
-        {/* Smoke (static) */}
+        {/* Smoke */}
         <div
           className="absolute left-[44%] top-[40%] h-14 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full"
-          style={{ background: "radial-gradient(circle, hsl(210 10% 80% / 0.35), transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, hsl(210 10% 80% / 0.30), transparent 70%)" }}
         />
         {/* Bomb */}
         <div className="absolute left-[25%] top-[26%] -translate-x-1/2 -translate-y-1/2 text-loss text-xs font-bold font-mono-rs">C4</div>
 
-        {/* Static player dots */}
         {dots.map((d, i) => (
           <Dot key={i} {...d} />
         ))}
 
-        {/* Kill marker */}
-        <div className="absolute left-[60%] top-[58%] -translate-x-1/2 -translate-y-1/2 text-muted-foreground/60">
+        <div className="absolute left-[60%] top-[58%] -translate-x-1/2 -translate-y-1/2 text-muted-foreground/50">
           <Crosshair size={14} />
         </div>
       </div>
 
-      {/* Playback bar (static) */}
-      <div className="px-4 py-3 border-t border-border/60 space-y-2">
+      {/* Playback bar */}
+      <div className="px-4 py-3 border-t border-border/40 space-y-2">
         <div className="flex items-center gap-3">
           <SkipBack size={14} className="text-muted-foreground" />
           <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground">
@@ -156,7 +153,7 @@ function Dot({ team, top, left, rot }: { team: "ct" | "tt"; top: string; left: s
         />
         <div
           className="relative h-2.5 w-2.5 rounded-full"
-          style={{ background: color, border: "1.5px solid hsl(220 18% 6%)" }}
+          style={{ background: color, border: `1.5px solid hsl(240 10% 4%)` }}
         />
       </div>
     </div>

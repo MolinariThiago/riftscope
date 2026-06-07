@@ -1,27 +1,10 @@
 "use client";
 
-// Cinematic hero — tactical radar + glow + live trust counters.
-//
-// Structure:
-//   ┌────────────────────────────────────────────────┐
-//   │  ┌── ambient bg ──────────────────────────────┐│
-//   │  │  drifting orbs · scanline · grid          ││
-//   │  └────────────────────────────────────────────┘│
-//   │                                                 │
-//   │            R00 · START HERE                     │
-//   │       See every angle.                          │
-//   │       Win every round.                          │
-//   │       [ Sign in with Steam ]  [ Watch demo ]   │
-//   │                                                 │
-//   │    DEMOS · MATCHES · PLAYERS · ROUNDS          │
-//   │                                                 │
-//   │              ╭─── animated radar ───╮          │
-//   │              │ player dots + sweep  │          │
-//   │              ╰──────────────────────╯          │
-//   └────────────────────────────────────────────────┘
+// Premium hero — burgundy identity, coach-targeted copy.
+// "Análisis táctico, redefinido." as the brand tagline.
 
 import Link from "next/link";
-import { ArrowRight, Play, Shield } from "lucide-react";
+import { ArrowRight, Shield, Eye } from "lucide-react";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 
@@ -33,8 +16,6 @@ import { TacticalRadar } from "./TacticalRadar";
 export function LandingHero() {
   const user = useAuthStore((s) => s.user);
 
-  // Trust counters — anonymous endpoint, cheap. Fail silently into
-  // placeholder text so the hero still renders if the API hiccups.
   const { data: stats } = useQuery({
     queryKey: ["public-stats"],
     queryFn: () => api.stats.publicStats(),
@@ -43,62 +24,62 @@ export function LandingHero() {
   });
 
   return (
-    <section className="relative pt-32 pb-16 px-6 overflow-hidden">
-      {/* ====== Ambient background layer ====== */}
+    <section className="relative pt-36 pb-20 px-6 overflow-hidden">
       <AmbientBackground />
 
       <div className="relative max-w-6xl mx-auto">
-        {/* ====== Headline block ====== */}
         <motion.div
-          className="max-w-3xl mx-auto text-center space-y-7"
-          variants={staggerContainer(0.08)}
+          className="max-w-3xl mx-auto text-center space-y-8"
+          variants={staggerContainer(0.1)}
           initial="hidden"
           animate="show"
         >
+          {/* Tagline badge */}
           <motion.div variants={fadeUp} className="flex justify-center">
-            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-[11px] font-semibold text-primary font-mono-rs tracking-wider">
+            <span className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full border border-primary/20 bg-primary/5 text-[11px] font-semibold text-primary font-mono-rs tracking-widest uppercase">
               <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary/70" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary/60" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-primary" />
               </span>
-              R00 · START HERE
+              Plataforma de inteligencia para CS2
             </span>
           </motion.div>
 
+          {/* Main headline */}
           <motion.h1
             variants={fadeUp}
             className="text-5xl sm:text-6xl lg:text-7xl font-display font-bold leading-[1.04] tracking-tight"
           >
-            See every angle.
+            Análisis táctico,
             <br />
-            <span className="gradient-text drop-shadow-[0_0_30px_hsl(var(--primary)/0.35)]">
-              Win every round.
+            <span className="gradient-text drop-shadow-[0_0_40px_hsl(var(--primary)/0.25)]">
+              redefinido.
             </span>
           </motion.h1>
 
           <motion.p
             variants={fadeUp}
-            className="text-lg text-muted-foreground leading-relaxed max-w-xl mx-auto"
+            className="text-lg sm:text-xl text-muted-foreground leading-relaxed max-w-2xl mx-auto"
           >
-            Watch any pro CS2 match on a 2D tactical map. Every kill, every
-            grenade, every rotation — replayable in one click, with the
-            stats and rankings that make every round legible.
+            La plataforma todo-en-uno para coaches y analistas de CS2.
+            Estudiá rivales, armá tácticas y rankeá jugadores &mdash;
+            todo desde un solo lugar.
           </motion.p>
 
+          {/* CTA buttons */}
           <motion.div
             variants={fadeUp}
-            className="flex flex-wrap justify-center gap-3 pt-2"
+            className="flex flex-wrap justify-center gap-4 pt-2"
           >
             <Link
               href={user ? "/pro" : "/login"}
-              className="group relative inline-flex items-center gap-2.5 px-6 py-3 rounded-lg font-semibold text-sm text-primary-foreground transition-all"
+              className="group relative inline-flex items-center gap-2.5 px-7 py-3.5 rounded-lg font-semibold text-sm text-primary-foreground transition-all"
               style={{ fontFamily: "var(--font-display)" }}
             >
-              {/* Glow halo */}
-              <span className="absolute inset-0 rounded-lg bg-primary shadow-[0_0_40px_-5px_hsl(var(--primary)/0.7)] group-hover:shadow-[0_0_55px_-5px_hsl(var(--primary)/0.9)] transition-shadow" />
+              <span className="absolute inset-0 rounded-lg bg-primary shadow-[0_0_50px_-8px_hsl(var(--primary)/0.6)] group-hover:shadow-[0_0_60px_-5px_hsl(var(--primary)/0.8)] transition-shadow" />
               <span className="relative inline-flex items-center gap-2.5">
                 <Shield size={16} />
-                {user ? "Open dashboard" : "Sign in with Steam"}
+                {user ? "Ir al dashboard" : "Ingresar con Steam"}
                 <ArrowRight
                   size={14}
                   className="group-hover:translate-x-1 transition-transform"
@@ -107,67 +88,49 @@ export function LandingHero() {
             </Link>
             <Link
               href="#replay"
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-lg text-sm text-foreground border border-border bg-surface/40 backdrop-blur-sm hover:border-primary/40 hover:bg-surface transition-colors"
+              className="inline-flex items-center gap-2.5 px-7 py-3.5 rounded-lg text-sm font-medium text-foreground border border-border bg-surface/40 backdrop-blur-sm hover:border-primary/30 hover:bg-surface transition-all"
             >
-              <Play size={14} className="text-primary" fill="currentColor" />
-              See it in action
+              <Eye size={15} className="text-primary" />
+              Ver en acción
             </Link>
           </motion.div>
 
-          {/* ====== Trust counter strip ====== */}
+          {/* Trust counter strip */}
           <motion.div
             variants={fadeUp}
-            className="pt-6 grid grid-cols-2 sm:grid-cols-4 gap-px max-w-2xl mx-auto rounded-xl overflow-hidden border border-border/60 bg-border/40"
+            className="pt-8 grid grid-cols-2 sm:grid-cols-4 gap-px max-w-2xl mx-auto rounded-xl overflow-hidden border border-border/40 bg-border/20"
           >
-            <Stat
-              label="Pro matches"
-              value={stats?.proMatches}
-              fallback="100+"
-            />
-            <Stat
-              label="Demos analysed"
-              value={stats?.demosAnalysed}
-              fallback="200+"
-            />
-            <Stat
-              label="Players ranked"
-              value={stats?.playersRanked}
-              fallback="2 000+"
-            />
-            <Stat
-              label="Rounds analysed"
-              value={stats?.roundsAnalysed}
-              fallback="50 000+"
-            />
+            <Stat label="Partidos pro" value={stats?.proMatches} fallback="100+" />
+            <Stat label="Demos analizadas" value={stats?.demosAnalysed} fallback="200+" />
+            <Stat label="Jugadores rankeados" value={stats?.playersRanked} fallback="2 000+" />
+            <Stat label="Rondas analizadas" value={stats?.roundsAnalysed} fallback="50 000+" />
           </motion.div>
         </motion.div>
 
-        {/* ====== Animated radar showcase ====== */}
+        {/* Animated radar showcase */}
         <motion.div
-          className="mt-20 relative"
+          className="mt-24 relative"
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.4 }}
+          transition={{ duration: 0.8, delay: 0.5 }}
         >
           <div className="relative max-w-3xl mx-auto">
-            {/* Soft glow under the radar */}
-            <div className="absolute inset-x-10 -bottom-10 h-32 bg-primary/20 blur-3xl rounded-full" />
+            <div className="absolute inset-x-10 -bottom-12 h-36 bg-primary/15 blur-[60px] rounded-full" />
 
-            <div className="relative rounded-2xl border border-border bg-surface/70 backdrop-blur-md overflow-hidden">
-              {/* Top mini-bar — looks like the viewer chrome */}
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/60 text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground">
+            <div className="relative rounded-2xl border border-border bg-surface/60 backdrop-blur-md overflow-hidden shadow-2xl shadow-primary/5">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/40 text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground">
                 <div className="flex items-center gap-3">
                   <div className="flex gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-loss/70" />
-                    <span className="h-2 w-2 rounded-full bg-amber-500/70" />
                     <span className="h-2 w-2 rounded-full bg-primary/70" />
+                    <span className="h-2 w-2 rounded-full bg-accent/70" />
+                    <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
                   </div>
-                  <span>RIFTSCOPE · 2D VIEWER · LIVE</span>
+                  <span>RIFTSCOPE · VISOR 2D · EN VIVO</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="hidden sm:inline">DE_MIRAGE</span>
-                  <span className="hidden sm:inline">ROUND 14</span>
-                  <span className="text-primary">REC</span>
+                  <span className="hidden sm:inline">RONDA 14</span>
+                  <span className="text-primary font-semibold">REC</span>
                 </div>
               </div>
 
@@ -181,7 +144,7 @@ export function LandingHero() {
 }
 
 // ===========================================================================
-// Stat — one cell of the trust counter strip
+// Stat cell
 // ===========================================================================
 function Stat({
   label,
@@ -195,18 +158,17 @@ function Stat({
   const display =
     value !== undefined ? formatCount(value) : <span className="opacity-60">{fallback}</span>;
   return (
-    <div className="bg-surface/80 backdrop-blur-sm px-4 py-3 text-center">
+    <div className="bg-surface/60 backdrop-blur-sm px-4 py-3.5 text-center">
       <div className="text-2xl font-display font-bold text-foreground animate-count-in tabular-nums">
         {display}
       </div>
-      <div className="text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground mt-0.5">
+      <div className="text-[10px] font-mono-rs uppercase tracking-wider text-muted-foreground mt-1">
         {label}
       </div>
     </div>
   );
 }
 
-// Compact number formatter: 1 245 → "1.2 k", 53 200 → "53 k", 1 200 000 → "1.2 M"
 function formatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} M`;
   if (n >= 10_000) return `${Math.round(n / 1_000)} k`;
@@ -215,40 +177,36 @@ function formatCount(n: number): string {
 }
 
 // ===========================================================================
-// AmbientBackground — drifting orbs, scanlines, dotted grid.
-// Pure decoration, no semantics, sits behind everything in the hero.
+// Ambient background — premium burgundy glow
 // ===========================================================================
 function AmbientBackground() {
   return (
     <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
-      {/* Dense tactical grid */}
-      <div className="absolute inset-0 opacity-50">
+      {/* Subtle grid */}
+      <div className="absolute inset-0 opacity-30">
         <div
           className="absolute inset-0"
           style={{
             backgroundImage:
-              "linear-gradient(hsl(var(--primary) / 0.04) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--primary) / 0.04) 1px, transparent 1px)",
-            backgroundSize: "32px 32px",
+              "linear-gradient(hsl(var(--primary) / 0.03) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--primary) / 0.03) 1px, transparent 1px)",
+            backgroundSize: "40px 40px",
           }}
         />
       </div>
 
-      {/* Two large drifting glow orbs */}
-      <div className="absolute -top-32 -left-32 w-[480px] h-[480px] rounded-full bg-primary/15 blur-[120px] animate-orb-drift" />
+      {/* Burgundy glow orbs */}
+      <div className="absolute -top-40 left-1/4 w-[600px] h-[600px] rounded-full bg-primary/8 blur-[150px] animate-orb-drift" />
       <div
-        className="absolute -bottom-40 -right-32 w-[520px] h-[520px] rounded-full bg-accent/15 blur-[140px] animate-orb-drift"
+        className="absolute -bottom-40 right-1/4 w-[500px] h-[500px] rounded-full bg-accent/6 blur-[140px] animate-orb-drift"
         style={{ animationDelay: "-7s" }}
       />
 
-      {/* Scanline texture overlay — VERY subtle */}
-      <div className="absolute inset-0 bg-scanlines opacity-30" />
-
-      {/* Radial vignette at the edges so the focus stays mid */}
+      {/* Radial vignette */}
       <div
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse at center, transparent 40%, hsl(var(--background) / 0.85) 100%)",
+            "radial-gradient(ellipse at center, transparent 35%, hsl(var(--background) / 0.9) 100%)",
         }}
       />
     </div>

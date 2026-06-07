@@ -13,23 +13,15 @@ import {
   LandingWhatsNew,
 } from "@/components/landing/LandingModules";
 
-// Tactical landing flow (cs2.cam-inspired R-series):
-//   R00 — Hero (start here)
-//   R02 — What's new (recent additions)
-//   R03 — Core analysis (replay showcase + advanced stats)
-//   R04 — Pro matches (auto-import, tier filter, Bo3)
-//   R05 — Leaderboards (HLTV 2.0 across the corpus)
-//   R06 — Tactical board + playbook
-//   R09 — FAQ
-// Section labels live INSIDE each component so the page-level
-// composition stays a thin shell.
+// Landing page — "Análisis táctico, redefinido."
+// Burgundy premium identity, Spanish copy, coach/analyst targeted.
 export default function HomePage() {
   return (
     <div className="relative min-h-screen">
       {/* Subtle static background */}
       <div className="fixed inset-0 -z-10">
         <div className="absolute inset-0 bg-background" />
-        <div className="absolute inset-0 bg-grid-pattern opacity-30" />
+        <div className="absolute inset-0 bg-grid-pattern opacity-20" />
       </div>
 
       <LandingNav />
@@ -49,7 +41,7 @@ export default function HomePage() {
 
 function LandingFooter() {
   return (
-    <footer className="border-t border-border/50">
+    <footer className="border-t border-border/30">
       <div className="max-w-6xl mx-auto px-6 py-14">
         <div className="grid gap-10 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
           {/* Brand */}
@@ -62,8 +54,8 @@ function LandingFooter() {
               </span>
             </div>
             <p className="text-sm text-muted-foreground max-w-xs leading-relaxed">
-              The 2D demo replay & analytics platform for Counter-Strike 2.
-              See every angle, win every round.
+              Análisis táctico, redefinido. La plataforma de inteligencia
+              todo-en-uno para coaches y analistas de CS2.
             </p>
             <div className="flex items-center gap-3 pt-1">
               <SocialLink href="https://discord.gg" label="Discord"><MessageCircle size={16} /></SocialLink>
@@ -72,29 +64,28 @@ function LandingFooter() {
             </div>
           </div>
 
-          <FooterCol title="Product" links={[
-            { label: "Features", href: "#features" },
-            { label: "2D Replay", href: "#replay" },
-            { label: "Pricing", href: "#" },
+          <FooterCol title="Producto" links={[
+            { label: "Funciones", href: "#features" },
+            { label: "Visor 2D", href: "#replay" },
+            { label: "Leaderboards", href: "/leaderboards" },
           ]} />
-          <FooterCol title="Resources" links={[
-            { label: "Docs", href: "/docs" },
-            { label: "Blog", href: "/blog" },
+          <FooterCol title="Recursos" links={[
+            { label: "Documentación", href: "/docs" },
             { label: "Changelog", href: "#" },
           ]} />
-          <FooterCol title="Company" links={[
-            { label: "Privacy", href: "/privacy" },
-            { label: "Terms", href: "/terms" },
-            { label: "Contact", href: "#" },
+          <FooterCol title="Legal" links={[
+            { label: "Privacidad", href: "/privacy" },
+            { label: "Términos", href: "/terms" },
+            { label: "Contacto", href: "#" },
           ]} />
         </div>
 
-        <div className="mt-12 pt-6 border-t border-border/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="mt-12 pt-6 border-t border-border/30 flex flex-col sm:flex-row items-center justify-between gap-4">
           <span className="text-muted-foreground text-sm">
-            © 2026 RIFTSCOPE. All rights reserved.
+            &copy; 2026 RIFTSCOPE. Todos los derechos reservados.
           </span>
           <span className="text-xs text-muted-foreground font-mono-rs">
-            Not affiliated with Valve Corporation.
+            No afiliado con Valve Corporation.
           </span>
         </div>
       </div>
@@ -135,9 +126,9 @@ function HexLogo() {
   return (
     <div className="w-8 h-8">
       <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-        <path d="M16 2L28 8V16L16 22L4 16V8L16 2Z" stroke="hsl(185 100% 52%)" strokeWidth="1.5" fill="hsl(185 100% 52% / 0.1)" />
-        <path d="M16 8L22 11.5V18.5L16 22L10 18.5V11.5L16 8Z" fill="hsl(185 100% 52%)" opacity="0.5" />
-        <circle cx="16" cy="15" r="3" fill="hsl(185 100% 52%)" />
+        <path d="M16 2L28 8V16L16 22L4 16V8L16 2Z" stroke="hsl(350 70% 33%)" strokeWidth="1.5" fill="hsl(350 70% 33% / 0.1)" />
+        <path d="M16 8L22 11.5V18.5L16 22L10 18.5V11.5L16 8Z" fill="hsl(350 70% 33%)" opacity="0.5" />
+        <circle cx="16" cy="15" r="3" fill="hsl(350 70% 33%)" />
       </svg>
     </div>
   );

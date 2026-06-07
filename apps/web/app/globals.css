@@ -6,27 +6,27 @@
 
 @layer base {
   :root {
-    /* RIFTSCOPE Dark Theme – Primary */
-    --background: 220 18% 6%;
-    --foreground: 210 20% 92%;
+    /* RIFTSCOPE Dark Theme – Burgundy Premium */
+    --background: 240 10% 4%;
+    --foreground: 30 15% 90%;
 
-    --surface: 220 16% 9%;
-    --surface-elevated: 220 14% 12%;
-    --surface-overlay: 220 12% 16%;
+    --surface: 240 8% 7%;
+    --surface-elevated: 240 7% 10%;
+    --surface-overlay: 240 6% 14%;
 
-    --border: 220 14% 18%;
-    --border-subtle: 220 14% 13%;
+    --border: 240 8% 16%;
+    --border-subtle: 240 8% 11%;
 
-    /* Electric cyan-teal accent */
-    --primary: 185 100% 52%;
-    --primary-foreground: 220 18% 6%;
-    --primary-dim: 185 60% 18%;
+    /* Deep burgundy accent — premium, exclusive */
+    --primary: 350 70% 33%;
+    --primary-foreground: 0 0% 100%;
+    --primary-dim: 350 40% 12%;
 
-    --accent: 270 80% 65%;
+    --accent: 30 60% 50%;
     --accent-foreground: 0 0% 100%;
 
-    --muted: 220 14% 14%;
-    --muted-foreground: 215 15% 50%;
+    --muted: 240 8% 12%;
+    --muted-foreground: 220 10% 48%;
 
     --destructive: 0 72% 56%;
     --destructive-foreground: 0 0% 100%;
@@ -48,19 +48,19 @@
 
   /* Theme: tactical-dark (default) — same as :root above */
   html[data-theme="tactical-dark"] {
-    --background: 220 18% 6%;
-    --foreground: 210 20% 92%;
-    --surface: 220 16% 9%;
-    --surface-elevated: 220 14% 12%;
-    --surface-overlay: 220 12% 16%;
-    --border: 220 14% 18%;
-    --border-subtle: 220 14% 13%;
-    --primary: 185 100% 52%;
-    --primary-foreground: 220 18% 6%;
-    --primary-dim: 185 60% 18%;
-    --accent: 270 80% 65%;
-    --muted: 220 14% 14%;
-    --muted-foreground: 215 15% 50%;
+    --background: 240 10% 4%;
+    --foreground: 30 15% 90%;
+    --surface: 240 8% 7%;
+    --surface-elevated: 240 7% 10%;
+    --surface-overlay: 240 6% 14%;
+    --border: 240 8% 16%;
+    --border-subtle: 240 8% 11%;
+    --primary: 350 70% 33%;
+    --primary-foreground: 0 0% 100%;
+    --primary-dim: 350 40% 12%;
+    --accent: 30 60% 50%;
+    --muted: 240 8% 12%;
+    --muted-foreground: 220 10% 48%;
   }
 
   /* Theme: hltv-classic — orange accent on near-white */
@@ -195,9 +195,9 @@
     text-shadow: 0 0 20px hsl(var(--primary) / 0.5);
   }
 
-  /* Primary gradient text */
+  /* Primary gradient text — burgundy → rose → warm gold */
   .gradient-text {
-    background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(185 100% 70%) 50%, hsl(var(--accent)) 100%);
+    background: linear-gradient(135deg, hsl(350 70% 40%) 0%, hsl(340 60% 55%) 50%, hsl(30 60% 55%) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;

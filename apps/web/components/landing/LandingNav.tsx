@@ -26,9 +26,9 @@ export function LandingNav() {
         <Link href="/" className="flex items-center gap-3 group">
           <div className="w-8 h-8 relative transition-transform duration-300 group-hover:scale-105">
             <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-              <path d="M16 2L28 8V16L16 22L4 16V8L16 2Z" stroke="hsl(185 100% 52%)" strokeWidth="1.5" fill="hsl(185 100% 52% / 0.1)" />
-              <path d="M16 8L22 11.5V18.5L16 22L10 18.5V11.5L16 8Z" fill="hsl(185 100% 52%)" opacity="0.5" />
-              <circle cx="16" cy="15" r="3" fill="hsl(185 100% 52%)" />
+              <path d="M16 2L28 8V16L16 22L4 16V8L16 2Z" stroke="hsl(350 70% 33%)" strokeWidth="1.5" fill="hsl(350 70% 33% / 0.1)" />
+              <path d="M16 8L22 11.5V18.5L16 22L10 18.5V11.5L16 8Z" fill="hsl(350 70% 33%)" opacity="0.5" />
+              <circle cx="16" cy="15" r="3" fill="hsl(350 70% 33%)" />
             </svg>
           </div>
           <span className="font-display font-bold text-xl tracking-tight">
@@ -39,10 +39,9 @@ export function LandingNav() {
 
         {/* Desktop nav */}
         <div className="hidden md:flex items-center gap-8">
-          <NavLink href="#replay">2D Replay</NavLink>
-          <NavLink href="#features">Features</NavLink>
+          <NavLink href="#replay">Visor 2D</NavLink>
+          <NavLink href="#features">Funciones</NavLink>
           <NavLink href="/docs">Docs</NavLink>
-          <NavLink href="/blog">Blog</NavLink>
         </div>
 
         {/* CTA */}
@@ -51,14 +50,14 @@ export function LandingNav() {
             href="/login"
             className="text-sm text-muted-foreground hover:text-foreground transition-colors px-4 py-2"
           >
-            Sign in
+            Iniciar sesión
           </Link>
           <Link
-            href="/register"
+            href="/login"
             className="text-sm font-semibold px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors duration-200"
             style={{ fontFamily: "var(--font-display)" }}
           >
-            Get Started
+            Comenzar
           </Link>
         </div>
 
@@ -83,12 +82,12 @@ export function LandingNav() {
             transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
           >
             <div className="px-6 py-4 flex flex-col gap-3">
-              <NavLink href="#replay" mobile onClick={() => setMobileOpen(false)}>2D Replay</NavLink>
-              <NavLink href="#features" mobile onClick={() => setMobileOpen(false)}>Features</NavLink>
+              <NavLink href="#replay" mobile onClick={() => setMobileOpen(false)}>Visor 2D</NavLink>
+              <NavLink href="#features" mobile onClick={() => setMobileOpen(false)}>Funciones</NavLink>
               <NavLink href="/docs" mobile onClick={() => setMobileOpen(false)}>Docs</NavLink>
               <div className="pt-2 flex flex-col gap-2">
-                <Link href="/login" className="text-sm text-center py-2.5 border border-border rounded-lg text-foreground">Sign in</Link>
-                <Link href="/register" className="text-sm font-semibold text-center py-2.5 bg-primary text-primary-foreground rounded-lg">Get Started</Link>
+                <Link href="/login" className="text-sm text-center py-2.5 border border-border rounded-lg text-foreground">Iniciar sesión</Link>
+                <Link href="/login" className="text-sm font-semibold text-center py-2.5 bg-primary text-primary-foreground rounded-lg">Comenzar</Link>
               </div>
             </div>
           </motion.div>
