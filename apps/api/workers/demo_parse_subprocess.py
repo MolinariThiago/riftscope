@@ -59,7 +59,7 @@ def main() -> None:
     # parent (no SQLAlchemy engine setup happens just because the
     # parent referenced our module name).
     from core.utc import utcnow_naive
-    from services.parser import get_parser
+    from services.parser_factory import get_parser
     from workers.demo_worker import (
         _persist_insights,
         _persist_normalized,
