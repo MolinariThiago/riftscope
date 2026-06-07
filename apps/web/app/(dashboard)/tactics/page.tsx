@@ -6,6 +6,7 @@ import { Loader2, Save, FilePlus2, FolderOpen, Trash2, Check } from "lucide-reac
 
 import { TacticsToolbar } from "@/components/tactics/TacticsToolbar";
 import { FrameTimeline } from "@/components/tactics/FrameTimeline";
+import { ZoomControls } from "@/components/tactics/ZoomControls";
 import type { TacticalBoardHandle } from "@/components/tactics/TacticalBoard";
 import { usePlaybook } from "@/lib/stores/playbook";
 import { useMapMeta } from "@/lib/hooks/useMaps";
@@ -198,7 +199,7 @@ export default function TacticsPage() {
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Untitled tactic"
+          placeholder="Sin título"
           className="w-52 bg-transparent text-sm font-display font-semibold focus:outline-none border-b border-transparent focus:border-primary/50"
         />
 
@@ -213,7 +214,7 @@ export default function TacticsPage() {
         </select>
 
         <div className="inline-flex rounded-md border border-border overflow-hidden text-xs">
-          <SideBtn active={side === null} onClick={() => setSide(null)}>Both</SideBtn>
+          <SideBtn active={side === null} onClick={() => setSide(null)}>Ambos</SideBtn>
           <SideBtn active={side === "ct"} onClick={() => setSide("ct")} tint="#4a9eff">CT</SideBtn>
           <SideBtn active={side === "tt"} onClick={() => setSide("tt")} tint="#ffb347">T</SideBtn>
         </div>
@@ -221,10 +222,10 @@ export default function TacticsPage() {
         <select
           value={type ?? ""}
           onChange={(e) => setType(e.target.value || null)}
-          title="Tactic type"
+          title="Tipo de táctica"
           className="bg-surface border border-border rounded-md px-2 py-1.5 text-xs capitalize focus:outline-none focus:border-primary/60"
         >
-          <option value="">Type…</option>
+          <option value="">Tipo…</option>
           {TYPES.map((t) => (
             <option key={t} value={t}>{t}</option>
           ))}
@@ -234,7 +235,7 @@ export default function TacticsPage() {
           value={tags.join(", ")}
           onChange={(e) => setTags(e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
           placeholder="tags…"
-          title="Comma-separated tags"
+          title="Tags separados por coma"
           className="w-32 bg-surface border border-border rounded-md px-2 py-1.5 text-xs focus:outline-none focus:border-primary/60"
         />
 
@@ -242,7 +243,7 @@ export default function TacticsPage() {
           <select
             value={teamId ?? ""}
             onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : null)}
-            title="Share with a team"
+            title="Compartir con equipo"
             className="bg-surface border border-border rounded-md px-2 py-1.5 text-xs focus:outline-none focus:border-primary/60 max-w-[140px]"
           >
             <option value="">Personal</option>
@@ -257,7 +258,7 @@ export default function TacticsPage() {
             onClick={() => newPlaybook(map)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-xs text-foreground hover:bg-surface-elevated transition-colors"
           >
-            <FilePlus2 size={13} /> New
+            <FilePlus2 size={13} /> Nueva
           </button>
 
           <div className="relative">
@@ -265,13 +266,13 @@ export default function TacticsPage() {
               onClick={() => setShowLib((v) => !v)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-xs text-foreground hover:bg-surface-elevated transition-colors"
             >
-              <FolderOpen size={13} /> Library
+              <FolderOpen size={13} /> Playbook
             </button>
             {showLib && (
               <div className="absolute right-0 top-full mt-1.5 w-72 max-h-80 overflow-y-auto rounded-lg border border-border bg-surface shadow-xl z-30 p-1.5">
                 {library.length === 0 ? (
                   <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-                    No saved tactics yet.
+                    Sin tácticas guardadas.
                   </div>
                 ) : (
                   library.map((pb) => (
@@ -290,7 +291,7 @@ export default function TacticsPage() {
                       </button>
                       <button
                         onClick={() => del(pb.id)}
-                        title="Delete"
+                        title="Borrar"
                         className="p-1.5 rounded text-muted-foreground/70 hover:text-loss hover:bg-loss/10 transition-colors"
                       >
                         <Trash2 size={13} />
@@ -314,7 +315,7 @@ export default function TacticsPage() {
             ) : (
               <Check size={13} />
             )}
-            {saving ? "Saving…" : dirty ? "Save" : "Saved"}
+            {saving ? "Guardando…" : dirty ? "Guardar" : "Guardado"}
           </button>
         </div>
       </header>
@@ -327,30 +328,35 @@ export default function TacticsPage() {
         {placingId && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
             <div className="px-3 py-1.5 rounded-lg border border-primary/40 bg-background/90 backdrop-blur-sm text-xs font-mono-rs text-primary">
-              Click to place · Esc to cancel
+              Click para ubicar · Esc para cancelar
             </div>
           </div>
         )}
 
-        {/* Empty-state hint */}
+        {/* Empty-state hint — minimal, only shown when truly empty */}
         {entities.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="text-center max-w-xs px-6 py-5 rounded-xl border border-border/50 bg-background/70 backdrop-blur-sm">
-              <p className="text-sm font-display font-semibold mb-1">Empty board</p>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Add players and utilities from the toolbar on the left — or hit
-                <span className="text-foreground font-medium"> Quick 5v5</span> to start fast.
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div className="text-center px-5 py-3 rounded-lg border border-border/40 bg-background/60 backdrop-blur-sm">
+              <p className="text-xs text-muted-foreground">
+                Tocá <span className="text-primary font-semibold">5v5</span> abajo para arrancar
               </p>
             </div>
           </div>
         )}
 
+        {/* Zoom rail — top left */}
         <div className="absolute top-3 left-3 z-10 pointer-events-auto">
-          <TacticsToolbar board={board} />
+          <ZoomControls board={board} />
         </div>
 
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 pointer-events-auto">
+        {/* Frame timeline — top right (compact, doesn't compete with toolbar) */}
+        <div className="absolute top-3 right-3 z-10 pointer-events-auto">
           <FrameTimeline board={board} />
+        </div>
+
+        {/* Main toolbar — bottom centered (cs2.cam-style) */}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 pointer-events-auto max-w-[95vw] overflow-x-auto">
+          <TacticsToolbar board={board} />
         </div>
       </div>
     </div>
