@@ -66,6 +66,19 @@ def main() -> None:
         _persist_round_tactics,
         _update_demo,
     )
+    # CRITICAL: import ALL ORM models BEFORE any DB query runs.
+    # SQLAlchemy resolves relationships lazily — when _update_demo
+    # touches Demo, the mapper needs every related class (User for
+    # Demo.uploader, etc.) to be defined. If the subprocess only
+    # imports Demo, mapper init crashes with:
+    #   "expression 'User' failed to locate a name ('User')"
+    # and every DB write in the subprocess silently fails (the parse
+    # runs OK but no status updates land, so demos look stuck).
+    from db.models.user import User  # noqa: F401
+    from db.models.demo import Demo, DemoKill, DemoPlayer, DemoRound  # noqa: F401
+    from db.models.pro_match import ProMatch  # noqa: F401
+    from db.models.insight import DemoInsight  # noqa: F401
+    from db.models.round_tactic import RoundTactic  # noqa: F401
 
     t0 = time.perf_counter()
     try:

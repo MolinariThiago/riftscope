@@ -40,6 +40,25 @@ logger = logging.getLogger("riftscope.worker")
 # Matches s3://bucket/key — the canonical URI we get from S3DemoStorage.save_demo.
 _S3_URI = re.compile(r"^s3://([^/]+)/(.+)$")
 
+# Global parse semaphore — bounds how many demos can be parsed AT THE
+# SAME TIME across the whole process. Railway Hobby has 512 MB total
+# for the API + scheduler + parser, and the parser alone peaks around
+# 400 MB. Running two in parallel is a guaranteed OOM kill (exit -9).
+#
+# This bites HARD on Bo3 imports: _persist_demo_bytes spawns one
+# process_demo per .dem inside the archive, so a Bo3 was spawning 3-4
+# parsers in parallel and ALL of them got SIGKILL'd by the OOM-killer.
+#
+# Lazy because the loop doesn't exist at module import.
+_parse_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_parse_semaphore() -> asyncio.Semaphore:
+    global _parse_semaphore
+    if _parse_semaphore is None:
+        _parse_semaphore = asyncio.Semaphore(1)
+    return _parse_semaphore
+
 
 def _resolve_local_demo_path(
     file_path: str,
@@ -391,7 +410,21 @@ async def process_demo(demo_id: int, file_path: str) -> None:
         3. Parse the demo file
         4. Persist analysis_data + match metadata + normalized rows
         5. Mark as 'completed' (or 'failed' on error)
+
+    Wrapped by ``_get_parse_semaphore()`` so only ONE demo is being
+    parsed at a time process-wide. Without this, Bo3 imports
+    (which spawn one process_demo per .dem inside the archive)
+    triggered N parallel parses that all OOM-killed each other.
     """
+    # Wait for our turn before doing ANY work. We hold the slot
+    # through the entire pipeline (download → parse → persist) so
+    # at most one parser child process is alive at a time.
+    async with _get_parse_semaphore():
+        await _process_demo_locked(demo_id, file_path)
+
+
+async def _process_demo_locked(demo_id: int, file_path: str) -> None:
+    """Inner pipeline that runs while we hold the parse semaphore."""
     import time as _time
     t0 = _time.perf_counter()
 
