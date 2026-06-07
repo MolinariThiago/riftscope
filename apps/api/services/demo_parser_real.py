@@ -3078,16 +3078,15 @@ class ParseQualityError(ValueError):
     """
 
 
-# Minimum legitimate CS2 match. MR12 means first to 13 wins; even an
-# instant 13-0 stomp produces 13 rounds. Anything below this is a
-# truncated demo, a half-downloaded .rar, or a parser failure
-# pretending to be a success.
-_MIN_VALID_ROUNDS = 13
-# A CS2 match always has exactly 10 playable players (5v5). Less than
-# 10 means we missed someone — usually the team_clan_name extraction
-# failed on a coach/spectator and they leaked into the playable set,
-# pushing real players out.
-_MIN_VALID_PLAYERS = 10
+# Quality gate thresholds — configurable via env so the operator can
+# relax them for non-standard formats (showmatches, scrims, 2v2s)
+# without touching code.
+#
+# Defaults match competitive CS2 (MR12 = first to 13, always 5v5).
+import os as _os
+
+_MIN_VALID_ROUNDS = int(_os.environ.get("PARSE_MIN_ROUNDS", "13"))
+_MIN_VALID_PLAYERS = int(_os.environ.get("PARSE_MIN_PLAYERS", "10"))
 
 
 def _validate_parse_quality(
@@ -3104,6 +3103,10 @@ def _validate_parse_quality(
     are conservative on purpose — we would rather mark a real match
     failed (operator can reprocess) than persist a broken one that
     quietly hits the public feed.
+
+    Thresholds can be lowered via env vars ``PARSE_MIN_ROUNDS`` and
+    ``PARSE_MIN_PLAYERS`` (e.g. ``PARSE_MIN_ROUNDS=6`` accepts short
+    showmatches; ``PARSE_MIN_PLAYERS=2`` accepts 1v1s).
     """
     issues: list[str] = []
     if rounds < _MIN_VALID_ROUNDS:

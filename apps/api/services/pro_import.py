@@ -304,6 +304,25 @@ async def _import_match_demo_inner(
     match: ProMatch,
     proxy: str | None,
 ) -> ImportResult:
+    # Temp file for the download — written to disk immediately so the
+    # response body can be freed from RAM. Cleaned up in the finally
+    # block if extraction doesn't consume it.
+    tmp_download = UPLOAD_DIR / f"{uuid4()}.download.tmp"
+    try:
+        return await _do_import(db, match, proxy, tmp_download)
+    finally:
+        try:
+            tmp_download.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+async def _do_import(
+    db: Session,
+    match: ProMatch,
+    proxy: str | None,
+    tmp_download: Path,
+) -> ImportResult:
     try:
         proxies = {"http": proxy, "https": proxy} if proxy else None
 
@@ -312,51 +331,30 @@ async def _import_match_demo_inner(
             impersonate="chrome",
             proxies=proxies
         ) as client:
-            
-            # --- LÓGICA AUTOMÁTICA: BUSCADOR INTELIGENTE EN HLTV ---
+
+            # --- FASE 1: RESOLVER LA URL DE LA DEMO ---
             url_base = match.demo_url
 
             if not url_base:
-                logger.info("Buscando automáticamente %s vs %s en HLTV...", match.team_a, match.team_b)
-                
-                # Función interna para limpiar nombres de equipos
-                def get_main_word(name: str) -> str:
-                    ignore = {"team", "esports", "gaming", "clan", "fc", "club"}
-                    words = [w.lower() for w in re.split(r'\W+', name) if w]
-                    for w in words:
-                        if w not in ignore:
-                            return w
-                    return words[0] if words else ""
+                # Construir la URL directamente desde source_match_id
+                # (formato: "hltv-{id}") en vez de re-scrapear /results.
+                # El scheduler ya hizo ese request en _sync_step; duplicarlo
+                # quema proxy traffic y el matching por nombre de equipo era
+                # frágil (false positives/negatives con slugs abreviados).
+                hltv_id = None
+                if match.source_match_id and match.source_match_id.startswith("hltv-"):
+                    hltv_id = match.source_match_id[5:]  # strip "hltv-" prefix
 
-                word_a = get_main_word(match.team_a)
-                word_b = get_main_word(match.team_b)
-
-                # 1. Buscamos en la página de resultados de HLTV
-                results_resp = await client.get(
-                    "https://www.hltv.org/results",
-                    headers={"Referer": "https://www.hltv.org/"}
-                )
-                _check_response(results_resp, "hltv.org/results")
-
-                # 2. Extraemos todos los links de los partidos
-                match_links = re.findall(r'href=["\'](/matches/\d+/[^"\']+)["\']', results_resp.text)
-                
-                # 3. Comparamos para encontrar el correcto
-                found_match_url = None
-                for link in match_links:
-                    link_lower = link.lower()
-                    if word_a in link_lower and word_b in link_lower:
-                        found_match_url = "https://www.hltv.org" + link
-                        break
-                
-                if not found_match_url:
+                if not hltv_id:
                     return ImportResult(
-                        "no_demo_url", None, 
-                        f"No pude encontrar el partido ({word_a} vs {word_b}) en los resultados de HLTV."
+                        "no_demo_url", None,
+                        f"No source_match_id disponible para {match.team_a} vs {match.team_b}",
                     )
-                
-                logger.info("¡Página del partido encontrada!: %s", found_match_url)
-                url_base = found_match_url
+
+                url_base = f"https://www.hltv.org/matches/{hltv_id}/match-page"
+                logger.info(
+                    "URL construida desde source_match_id: %s", url_base,
+                )
 
             # --- FASE 2: ENCONTRAR LA DEMO ---
             if "/matches/" in url_base:
@@ -368,13 +366,13 @@ async def _import_match_demo_inner(
                 _check_response(page_resp, "match page")
 
                 match_link = re.search(r'href=["\'](/download/demo/\d+)["\']', page_resp.text)
-                
+
                 if not match_link:
                     return ImportResult(
-                        "no_demo_url", None, 
+                        "no_demo_url", None,
                         "El partido está en HLTV, pero todavía no subieron el archivo de la demo."
                     )
-                
+
                 demo_download_url = "https://www.hltv.org" + match_link.group(1)
                 logger.info("¡Link de descarga oficial encontrado!: %s", demo_download_url)
 
@@ -384,28 +382,33 @@ async def _import_match_demo_inner(
             else:
                 demo_download_url = url_base
 
-            # --- FASE 3: DESCARGA PESADA ---
+            # --- FASE 3: DESCARGA PESADA (a disco, no a RAM) ---
+            # curl_cffi doesn't support true streaming, so the response
+            # body is loaded in memory by .content. We write it to disk
+            # immediately and ``del`` the reference so Python can reclaim
+            # the buffer before the extraction phase doubles memory usage.
             logger.info("Iniciando descarga de la demo desde: %s", demo_download_url)
             r = await client.get(
                 demo_download_url,
-                headers={"Referer": url_base}
+                headers={"Referer": url_base},
             )
             _check_response(r, "demo download")
-            body = r.content
+
+            tmp_download.parent.mkdir(parents=True, exist_ok=True)
+            content = r.content
+            download_size = len(content)
+            tmp_download.write_bytes(content)
+            del content, r  # free RAM before extraction
 
             # Record the on-the-wire byte count so the scheduler's daily
             # budget cap (``PRO_DAILY_DOWNLOAD_LIMIT_GB``) can see this
-            # download against today's total. We stamp BEFORE the slow
-            # archive-extraction step so the budget reflects bytes that
-            # already burned the proxy quota even if extraction crashes
-            # later.  Persisted at the next db.commit() in the persist
-            # path below — match is in the same session.
+            # download against today's total.
             from core.utc import utcnow_naive as _utcnow_naive
-            match.import_bytes = len(body)
+            match.import_bytes = download_size
             match.import_completed_at = _utcnow_naive()
             logger.info(
                 "Descarga completada (%s MB). Procesando archivo...",
-                round(len(body) / (1024 * 1024), 1),
+                round(download_size / (1024 * 1024), 1),
             )
 
     except _Blocked:
@@ -442,16 +445,20 @@ async def _import_match_demo_inner(
             f"Couldn't reach HLTV: {cls}",
         )
 
-    # --- A PARTIR DE ACÁ NADA CAMBIÓ, ES TU CÓDIGO ORIGINAL ---
+    # --- EXTRACCIÓN: trabajar desde el archivo temporal en disco ---
     base_name = _sanitize_filename(
         f"{match.team_a}-vs-{match.team_b}-{match.id}"
     )
     primary_demo: Demo | None = None
 
-    if body[:4] == b"PK\x03\x04":
-        # ZIP archive — extract all .dem inside.
+    # Read magic bytes from disk for format detection (cheap: 8 bytes).
+    with open(tmp_download, "rb") as f:
+        magic = f.read(8)
+
+    if magic[:4] == b"PK\x03\x04":
+        # ZIP archive — extract all .dem inside (from disk, no BytesIO copy).
         try:
-            zf = zipfile.ZipFile(io.BytesIO(body))
+            zf = zipfile.ZipFile(str(tmp_download))
         except zipfile.BadZipFile as exc:
             logger.warning("Corrupted ZIP for match %s: %s", match.id, exc)
             return ImportResult(
@@ -475,24 +482,21 @@ async def _import_match_demo_inner(
             if i == 0:
                 primary_demo = demo
 
-    elif body[:7] == b"Rar!\x1a\x07\x00" or body[:8] == b"Rar!\x1a\x07\x01\x00":
-        # RAR archive. We try to extract with the ``rarfile`` package,
-        # which needs an external ``unrar`` binary. The runtime
-        # resolver (``services.rar_runtime``) tries hard to find one
-        # at startup, including auto-downloading from rarlab on
-        # Windows — so the auto-import flow Just Works for the
-        # oper witatorhout manual setup.
-        # Extraction shells out to unrar (blocking + potentially slow for a
-        # 300 MB+ .dem). Run it off the event loop so it never freezes the
-        # API. A missing/invalid binary returns None fast (see _try_extract_rar
-        # → rar_runtime validation), so this can't hang on the broken stub.
-        extracted = await asyncio.to_thread(_try_extract_rar, body, base_name)
+    elif magic[:7] == b"Rar!\x1a\x07\x00" or magic[:8] == b"Rar!\x1a\x07\x01\x00":
+        # RAR archive. Extraction shells out to unrar (blocking +
+        # potentially slow for a 300 MB+ .dem). Run it off the event
+        # loop so it never freezes the API.
+        # _try_extract_rar_from_file reads directly from the temp file
+        # — no second copy into RAM.
+        extracted = await asyncio.to_thread(
+            _try_extract_rar_from_file, str(tmp_download), base_name,
+        )
         if extracted is None:
-            # No unrar binary available. Save the archive so the user
+            # No unrar binary available. Move the archive so the user
             # can grab it from disk, but mark the Demo failed so the
             # scheduler doesn't re-attempt every tick.
             archive_path = UPLOAD_DIR / f"{uuid4()}-{base_name}.rar"
-            archive_path.write_bytes(body)
+            tmp_download.rename(archive_path)
             primary_demo = Demo(
                 filename=f"{base_name}.rar",
                 storage_filename=archive_path.name,
@@ -525,11 +529,12 @@ async def _import_match_demo_inner(
             if i == 0:
                 primary_demo = demo
 
-    elif body[:8].startswith(b"HL2DEMO") or body[:8].startswith(b"PBDEMO"):
-        # Naked .dem — easy path.
+    elif magic[:8].startswith(b"HL2DEMO") or magic[:8].startswith(b"PBDEMO"):
+        # Naked .dem — read from disk and persist.
+        dem_bytes = tmp_download.read_bytes()
         primary_demo = _persist_demo_bytes(
             db,
-            body,
+            dem_bytes,
             filename=f"{base_name}.dem",
             pro_match=match,
         )
@@ -537,7 +542,7 @@ async def _import_match_demo_inner(
     else:
         logger.warning(
             "Unknown archive format for match %s (first 16 bytes: %r)",
-            match.id, body[:16],
+            match.id, magic[:16],
         )
         return ImportResult(
             "unrecognized_format", None,
@@ -722,6 +727,59 @@ def _try_extract_rar(body: bytes, base_name: str) -> list[tuple[str, bytes]] | N
             tmp_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _try_extract_rar_from_file(
+    rar_path: str, base_name: str,
+) -> list[tuple[str, bytes]] | None:
+    """Extract ``.dem`` members from a RAR archive already on disk.
+
+    Unlike :func:`_try_extract_rar` (which receives bytes and writes a
+    temp file internally), this reads from an existing path — avoiding a
+    redundant copy when the caller already has the archive on disk (the
+    common case after the download-to-disk refactor).
+
+    Returns a list of ``(member_name, bytes)`` tuples on success,
+    ``None`` if extraction isn't possible.
+    """
+    try:
+        import rarfile  # type: ignore
+    except ImportError:
+        logger.warning("rarfile package not installed; can't extract .rar")
+        return None
+
+    if not getattr(rarfile, "UNRAR_TOOL", None):
+        logger.warning("no unrar binary configured; can't extract .rar")
+        return None
+
+    try:
+        rf = rarfile.RarFile(rar_path)
+    except Exception as exc:
+        logger.warning("invalid rar archive for %s: %s", base_name, exc)
+        return None
+
+    out: list[tuple[str, bytes]] = []
+    for info in rf.infolist():
+        name = info.filename
+        if not name.lower().endswith(".dem"):
+            continue
+        try:
+            data = rf.read(info)
+        except Exception as exc:
+            logger.warning(
+                "failed reading %s from rar for %s: %s",
+                name, base_name, exc,
+            )
+            continue
+        out.append((name, data))
+
+    if not out:
+        logger.warning("rar archive for %s had no .dem members", base_name)
+        return None
+    logger.info(
+        "extracted %d .dem files from rar for %s", len(out), base_name,
+    )
+    return out
 
 
 def _sanitize_filename(s: str) -> str:

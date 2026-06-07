@@ -12,7 +12,7 @@ FROM python:3.12-slim
 # so we drop it in the image rather than letting rar_runtime.py
 # auto-download it at boot.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends unrar-free \
+    && apt-get install -y --no-install-recommends unrar-free libxml2 libxslt1.1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

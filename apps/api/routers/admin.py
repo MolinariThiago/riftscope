@@ -14,6 +14,7 @@ reflects actual signup / upload activity.
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,6 +29,7 @@ from db.models.demo import Demo
 from db.models.user import User
 from routers.deps import get_current_user
 
+logger = logging.getLogger("riftscope.admin")
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -743,7 +745,7 @@ async def admin_reparse_pro_demos(
 
 
 @router.post("/pro/backfill-logos")
-def admin_backfill_logos(
+async def admin_backfill_logos(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
@@ -761,7 +763,6 @@ def admin_backfill_logos(
 
     Returns the count updated.
     """
-    import asyncio
     from db.models.pro_match import ProMatch
     from services.demo_sources.hltv import HltvSource
 
@@ -771,10 +772,7 @@ def admin_backfill_logos(
     # though, so we ignore everything else.
     source = HltvSource()
     try:
-        loop = asyncio.get_event_loop()
-        matches = loop.run_until_complete(
-            source.list_recent_matches(since=None, limit=200),
-        )
+        matches = await source.list_recent_matches(since=None, limit=200)
     except Exception as exc:
         return {"error": str(exc), "updated": 0}
 

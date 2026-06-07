@@ -294,6 +294,14 @@ async def _run_loop() -> None:
             except Exception:
                 logger.exception("scheduler auto-reset stuck demos failed")
 
+            # AUTO-RETRY — re-queue failed demos that have retryable
+            # errors and haven't exceeded the retry cap. Runs every tick
+            # but the cooldown window prevents hammering.
+            try:
+                _auto_retry_failed_demos()
+            except Exception:
+                logger.exception("scheduler auto-retry failed demos failed")
+
             # IMPORT step — drain the backlog of completed matches
             # that have a demo_url but no demo_id.
             try:
@@ -321,74 +329,150 @@ def _auto_reset_stuck_demos(older_than_minutes: int = 60) -> None:
     never runs. With ``WAIT_FOR_PARSE=True`` that single stuck demo
     blocks ALL future imports. This function runs every scheduler tick
     and self-heals without requiring manual admin action.
+
+    Also resets orphan ProMatches stuck in ``importing`` with no linked
+    Demo — these arise when the download died before creating the Demo
+    row (network timeout, proxy ban, etc.).
     """
-    from datetime import timedelta
     from db.models.demo import Demo
     from db.models.pro_match import ProMatch
 
-    cutoff = datetime.utcnow() - timedelta(minutes=max(1, older_than_minutes))
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=max(1, older_than_minutes))
     db = SessionLocal()
     try:
+        # --- Stuck demos ---
         stuck = (
             db.query(Demo)
             .filter(Demo.status == "processing")
             .filter(Demo.uploaded_at < cutoff)
             .all()
         )
-        if not stuck:
-            return
 
-        pro_match_ids = {d.pro_match_id for d in stuck if d.pro_match_id}
-        for d in stuck:
-            d.status = "failed"
-            d.error_message = (
-                "Auto-reset: parsing exceeded time limit "
-                f"({older_than_minutes}min). Worker was likely OOM-killed."
+        pro_match_ids: set[int] = set()
+        if stuck:
+            pro_match_ids = {d.pro_match_id for d in stuck if d.pro_match_id}
+            for d in stuck:
+                d.status = "failed"
+                d.error_message = (
+                    "Auto-reset: parsing exceeded time limit "
+                    f"({older_than_minutes}min). Worker was likely OOM-killed."
+                )
+
+            if pro_match_ids:
+                matches = (
+                    db.query(ProMatch)
+                    .filter(ProMatch.id.in_(pro_match_ids))
+                    .filter(ProMatch.import_status == "importing")
+                    .all()
+                )
+                for m in matches:
+                    m.import_status = "failed"
+
+            logger.info(
+                "auto-reset: marked %d stuck demo(s) as failed, unblocked %d match(es)",
+                len(stuck), len(pro_match_ids),
             )
 
-        if pro_match_ids:
-            matches = (
-                db.query(ProMatch)
-                .filter(ProMatch.id.in_(pro_match_ids))
-                .filter(ProMatch.import_status == "importing")
-                .all()
-            )
-            for m in matches:
-                m.import_status = "failed"
-
-        db.commit()
-        logger.info(
-            "auto-reset: marked %d stuck demo(s) as failed, unblocked %d match(es)",
-            len(stuck), len(pro_match_ids),
-        )
-    finally:
-        db.close()
-
-    # Also reset ProMatches stuck in "importing" with no linked Demo at all.
-    # This happens when the download died before creating the Demo row
-    # (network timeout, proxy ban, etc.). These matches never appear in
-    # the "stuck demos" query above because there IS no Demo row to find.
-    stale_cutoff = datetime.utcnow() - timedelta(minutes=max(1, older_than_minutes))
-    db2 = SessionLocal()
-    try:
-        from db.models.pro_match import ProMatch as _PM
+        # --- Orphan ProMatches stuck in "importing" with no Demo ---
+        # These never appear in the stuck-demos query because there IS
+        # no Demo row to find. The download died before creating one.
         orphan_importing = (
-            db2.query(_PM)
-            .filter(_PM.import_status == "importing")
-            .filter(_PM.demo_id.is_(None))
-            .filter(_PM.played_at < stale_cutoff)
+            db.query(ProMatch)
+            .filter(ProMatch.import_status == "importing")
+            .filter(ProMatch.demo_id.is_(None))
+            .filter(ProMatch.played_at < cutoff)
             .all()
         )
         if orphan_importing:
             for m in orphan_importing:
                 m.import_status = None  # reset to pending so scheduler retries
-            db2.commit()
             logger.info(
                 "auto-reset: cleared import_status on %d orphan match(es) stuck in 'importing'",
                 len(orphan_importing),
             )
+
+        db.commit()
     finally:
-        db2.close()
+        db.close()
+
+
+# Max retry attempts for failed demos before giving up permanently.
+_FAILED_RETRY_MAX = int(os.getenv("PRO_FAILED_RETRY_MAX", "3"))
+# Only retry demos that failed at least this many minutes ago (avoids
+# hammering a demo that fails instantly every tick).
+_FAILED_RETRY_COOLDOWN_MIN = int(os.getenv("PRO_FAILED_RETRY_COOLDOWN_MIN", "30"))
+
+
+def _auto_retry_failed_demos() -> int:
+    """Re-queue demos that failed with a retryable error.
+
+    Marks failed demos back to ``queued`` so the import step picks them
+    up again. Only demos with fewer than ``_FAILED_RETRY_MAX`` prior
+    attempts are eligible. Non-retryable errors (unrecognized format,
+    quality gate) are excluded.
+
+    Returns the number of demos re-queued.
+    """
+    non_retryable_patterns = [
+        "quality check",
+        "unrecognised file format",
+        "unsupported",
+        "no .dem files",
+        "no unrar binary",
+        "no demo_url",
+    ]
+
+    cooldown_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        minutes=max(1, _FAILED_RETRY_COOLDOWN_MIN)
+    )
+
+    db = SessionLocal()
+    try:
+        failed = (
+            db.query(Demo)
+            .filter(Demo.status == "failed")
+            .filter(Demo.pro_match_id.isnot(None))
+            .filter(Demo.uploaded_at < cooldown_cutoff)
+            .all()
+        )
+        requeued = 0
+        for d in failed:
+            # Skip non-retryable errors.
+            err = (d.error_message or "").lower()
+            if any(pat in err for pat in non_retryable_patterns):
+                continue
+            # Track retry count in the error message itself (simple,
+            # no schema change needed).
+            retry_count = 0
+            if d.error_message and "[retry " in d.error_message:
+                import re
+                m = re.search(r"\[retry (\d+)/", d.error_message)
+                if m:
+                    retry_count = int(m.group(1))
+            if retry_count >= _FAILED_RETRY_MAX:
+                continue
+            # Reset the demo so the worker picks it up again.
+            old_error = d.error_message or "unknown"
+            d.status = "queued"
+            d.error_message = f"[retry {retry_count + 1}/{_FAILED_RETRY_MAX}] previous: {old_error}"
+            d.processing_progress = 0
+            # Also clear the parent match's import_status so the
+            # scheduler doesn't skip it as "already imported".
+            if d.pro_match_id:
+                match = db.query(ProMatch).filter(ProMatch.id == d.pro_match_id).first()
+                if match and match.import_status == "failed":
+                    match.import_status = None
+            requeued += 1
+
+        if requeued:
+            db.commit()
+            logger.info("auto-retry: re-queued %d failed demo(s) for retry", requeued)
+        return requeued
+    except Exception:
+        logger.exception("auto-retry failed")
+        return 0
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
