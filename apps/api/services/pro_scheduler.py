@@ -47,7 +47,6 @@ from services.pro_import import (
     release_match,
 )
 from services.demo_sources.hltv import HltvSource
-from services.demo_sources.liquipedia import LiquipediaSource  # noqa: F401
 from services.rar_runtime import rar_runtime_status
 
 logger = logging.getLogger("riftscope.scheduler.pro")
@@ -179,12 +178,6 @@ def scheduler_status() -> dict[str, Any]:
         "hltv_source_cooldown_seconds": round(
             HltvSource.cooldown_remaining_seconds(),
         ),
-        # Legacy key kept for backward-compat with the frontend until it
-        # is updated to read the new one. Same data — the active source
-        # is now HLTV.
-        "liquipedia_cooldown_seconds": round(
-            HltvSource.cooldown_remaining_seconds(),
-        ),
         **_state,
     }
 
@@ -251,21 +244,26 @@ async def _run_loop() -> None:
         if await _wait_or_shutdown(STARTUP_DELAY_SECONDS):
             return
 
-        # ONE-SHOT BACKFILL: mark legacy ProMatches that the import
-        # pipeline can't process as permanently failed so they stop
-        # hammering the queue every tick.
+        # ONE-SHOT CLEANUP: delete legacy ProMatches that the active
+        # import pipeline can't process. These are remnants from when
+        # ``LiquipediaSource`` was part of the source rotation — every
+        # match it covered is also covered by HLTV (with better
+        # metadata), so the Liquipedia rows are pure clutter now.
         #
         # The import path in pro_import.py builds the HLTV match URL
         # from ``source_match_id`` ONLY when it starts with ``hltv-``.
         # Anything else (NULL, empty, ``liquipedia-XXX``, manual rows
-        # without an id, …) returns "no_demo_url" instantly. Catch
-        # them all and mark them failed once.
+        # without an id) is unrecoverable — delete them rather than
+        # leave failed rows around polluting /pro and the DB.
+        #
+        # ProMatches WITH a demo_id are preserved regardless: that
+        # demo is already parsed and visible on the site, so we keep
+        # the metadata even if the source_match_id is non-HLTV.
         try:
             db_init = SessionLocal()
-            from sqlalchemy import or_ as _or, and_ as _and, not_ as _not
-            from sqlalchemy import String as _String
+            from sqlalchemy import or_ as _or, not_ as _not
 
-            legacy_dead = (
+            legacy_query = (
                 db_init.query(ProMatch)
                 .filter(ProMatch.demo_id.is_(None))
                 .filter(_or(
@@ -273,32 +271,24 @@ async def _run_loop() -> None:
                     ProMatch.source_match_id == "",
                     _not(ProMatch.source_match_id.like("hltv-%")),
                 ))
-                .filter(_or(
-                    ProMatch.import_status.is_(None),
-                    ProMatch.import_status != "failed",
-                ))
-                .all()
             )
-            logger.info(
-                "scheduler startup: backfill found %d legacy match(es) "
-                "to permanently fail (source_match_id not 'hltv-*' or missing)",
-                len(legacy_dead),
-            )
-            for m in legacy_dead:
-                m.import_status = "failed"
-                m.import_error = (
-                    f"Legacy match — source_match_id={m.source_match_id!r} "
-                    "doesn't match HLTV pattern, cannot resolve demo URL"
-                )
-            if legacy_dead:
+            legacy_count = legacy_query.count()
+            if legacy_count > 0:
+                deleted = legacy_query.delete(synchronize_session=False)
                 db_init.commit()
                 logger.info(
-                    "scheduler startup: marked %d legacy match(es) as failed",
-                    len(legacy_dead),
+                    "scheduler startup: deleted %d legacy ProMatch row(s) "
+                    "without a usable HLTV source_match_id (Liquipedia "
+                    "leftovers + manual inserts without an id)",
+                    deleted,
+                )
+            else:
+                logger.info(
+                    "scheduler startup: no legacy ProMatch rows to clean up"
                 )
             db_init.close()
         except Exception:
-            logger.exception("scheduler startup backfill failed (non-fatal)")
+            logger.exception("scheduler startup cleanup failed (non-fatal)")
 
         last_sync_monotonic = 0.0
         first_run = True

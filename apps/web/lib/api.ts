@@ -388,10 +388,6 @@ export const api = {
           path: string | null;
           source: string;
         };
-        /** > 0 when Liquipedia is rate-limiting us. The UI shows a
-         *  yellow banner so users know why no new matches are flowing
-         *  in — it's the source, not a bug on our side. */
-        liquipedia_cooldown_seconds: number;
         /** Daily download budget — caps demo bytes pulled from HLTV in
          *  a single UTC day so the residential proxy quota lasts the
          *  month. ``exhausted=true`` means the scheduler is parked

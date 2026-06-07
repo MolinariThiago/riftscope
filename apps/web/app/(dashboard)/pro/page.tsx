@@ -483,19 +483,6 @@ export default function ProMatchesPage() {
               )}
             </div>
           )}
-          {/* Liquipedia rate-limit banner. When our IP is throttled,
-              show how many seconds until we can hit them again — this
-              is the most common reason matches aren't appearing. */}
-          {schedulerStatus &&
-            schedulerStatus.liquipedia_cooldown_seconds > 0 && (
-              <div className="inline-flex items-center gap-2 text-[11px] font-mono-rs px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-500">
-                <AlertCircle size={11} />
-                <span>
-                  Liquipedia en cooldown ·{" "}
-                  {Math.ceil(schedulerStatus.liquipedia_cooldown_seconds / 60)} min
-                </span>
-              </div>
-            )}
           {/* RAR extraction status — only flag when MISSING. When
               available we stay silent (it's expected to work). */}
           {schedulerStatus && !schedulerStatus.rar_extraction.available && (
