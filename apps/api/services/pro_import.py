@@ -676,16 +676,46 @@ def _persist_demo_bytes(
     filename: str,
     pro_match: ProMatch,
 ) -> Demo:
-    """Write ``data`` to the storage dir, create a Demo row, queue for parsing.
+    """Write ``data`` to local disk + remote storage, create a Demo row,
+    queue for parsing.
 
-    Doesn't go through ``services.queue`` because that interface needs
-    a FastAPI ``BackgroundTasks`` instance — we use ``asyncio.create_task``
-    directly so the same code works from the HTTP handler AND the
-    background scheduler.
+    CRITICAL: the upload to S3 (when ``STORAGE_BACKEND=s3``) is what makes
+    pro demos survive Railway container restarts. Without it, every
+    deploy wiped the local filesystem and orphan Demo rows pointed at
+    files that no longer existed — re-parses then failed with
+    ``FileNotFoundError`` and the auto-retry loop hammered them forever.
+
+    We write LOCALLY first (for the immediate parse, no S3 round trip)
+    AND upload to S3 (for future re-parses after a restart). The Demo
+    row's ``storage_filename`` is the basename for both backends, and
+    the worker's existing R2 fallback (``_fallback_s3_download``)
+    transparently re-downloads by basename when the local file is gone.
     """
+    from services.storage import get_storage
+
     storage_filename = f"{uuid4()}.dem"
     abs_path = UPLOAD_DIR / storage_filename
     abs_path.write_bytes(data)
+
+    # Best-effort upload to remote storage (S3/R2). Failure here doesn't
+    # block the queue — the local file is still parsable on this
+    # container's lifetime; only future re-parses are affected.
+    storage = get_storage()
+    if hasattr(storage, "upload_bytes"):
+        # Only call for S3 backend — LocalDemoStorage's upload_bytes
+        # is a no-op that just re-writes the same path.
+        from services.storage import LocalDemoStorage
+        if not isinstance(storage, LocalDemoStorage):
+            try:
+                storage.upload_bytes(storage_filename, data)
+            except Exception as exc:
+                logger.warning(
+                    "remote-storage upload failed for pro demo %s "
+                    "(parse will still run on local copy, but re-parses "
+                    "after container restart will fail): %s",
+                    storage_filename, exc,
+                )
+
     demo = Demo(
         filename=filename,
         storage_filename=storage_filename,
@@ -702,8 +732,7 @@ def _persist_demo_bytes(
     # Fire-and-forget the worker. ``process_demo`` is async and
     # self-contained — it opens its own DB session and updates the
     # Demo row as it goes. ``spawn`` retains a strong reference so the
-    # task isn't garbage-collected mid-parse (the old bare
-    # ``create_task`` silently died at "Procesando archivo...").
+    # task isn't garbage-collected mid-parse.
     spawn(process_demo(demo.id, str(abs_path)), name=f"parse-demo-{demo.id}")
     logger.info(
         "Queued pro-match demo for parsing: pro_match=%s demo_id=%s file=%s",

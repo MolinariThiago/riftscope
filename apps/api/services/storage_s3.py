@@ -167,6 +167,37 @@ class S3DemoStorage:
             logger.exception("S3 delete failed: %s", storage_filename)
             return False
 
+    def upload_bytes(self, key: str, data: bytes) -> str:
+        """Upload raw bytes to ``key`` and return the canonical s3:// URI.
+
+        Used by the pro-import path which already has the demo bytes in
+        memory (after extracting from a ZIP/RAR archive) and just needs
+        to persist them to S3 so the file survives container restarts.
+        """
+        try:
+            self.s3_client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=data,
+                ContentType="application/octet-stream",
+            )
+        except ClientError as exc:
+            logger.exception("S3 upload_bytes failed: %s", key)
+            raise RuntimeError(f"S3 upload failed: {exc}") from exc
+        logger.info(
+            "S3 upload_bytes OK: s3://%s/%s (%d bytes)",
+            self.bucket, key, len(data),
+        )
+        return f"s3://{self.bucket}/{key}"
+
+    def object_exists(self, key: str) -> bool:
+        """Return True if ``key`` exists in the bucket."""
+        try:
+            self.s3_client.head_object(Bucket=self.bucket, Key=key)
+            return True
+        except ClientError:
+            return False
+
     # ----------------------------------------------------------------------
     # Direct browser → R2 upload (presigned PUT)
     #

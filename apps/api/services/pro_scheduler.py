@@ -432,6 +432,12 @@ _NON_RETRYABLE_ERROR_PATTERNS = (
     "no source_match_id",
     "demoparser2 rejected every prop",
     "truncated or from an unsupported cs2 build",
+    # File-lost markers — re-spawning process_demo will fail with
+    # FileNotFoundError forever because the file is genuinely gone
+    # from both local FS and S3.
+    "file not found locally",
+    "s3 fallback is unavailable",
+    "file lost",
 )
 
 
@@ -537,22 +543,79 @@ def _auto_retry_failed_demos() -> int:
     finally:
         db.close()
 
-    # ---- Spawn the parser tasks AFTER releasing the DB session -------
-    # Done outside the session so a long-running ``process_demo`` can't
-    # hold a connection. The worker opens its own session.
+    # ---- Verify file availability BEFORE spawning a re-parse ---------
+    # The previous version blindly spawned process_demo, which failed
+    # instantly with FileNotFoundError when neither the local file nor
+    # the S3 object existed. That hammered the queue with useless
+    # retries. Now we check first: if the file is gone, we clear the
+    # match's demo_id + import_status so the scheduler RE-DOWNLOADS
+    # from HLTV instead of re-parsing a phantom file.
+    actually_reparsable: list[tuple[int, str]] = []
+    lost_demos: list[int] = []
     if requeued_demos:
+        from services.storage import UPLOAD_DIR, get_storage
+        storage = get_storage()
+        for demo_id, storage_filename in requeued_demos:
+            local_exists = (UPLOAD_DIR / storage_filename).exists()
+            remote_exists = False
+            if not local_exists and hasattr(storage, "object_exists"):
+                try:
+                    remote_exists = storage.object_exists(storage_filename)
+                except Exception:
+                    remote_exists = False
+            if local_exists or remote_exists:
+                actually_reparsable.append((demo_id, storage_filename))
+            else:
+                lost_demos.append(demo_id)
+
+    # ---- Handle lost demos: clear match.demo_id for re-download ------
+    if lost_demos:
+        db = SessionLocal()
+        try:
+            for demo_id in lost_demos:
+                d = db.query(Demo).filter(Demo.id == demo_id).first()
+                if not d:
+                    continue
+                # Mark the dead Demo row as permanently lost. The
+                # "file lost" marker is in _NON_RETRYABLE_ERROR_PATTERNS
+                # so this row won't bounce back into the retry loop.
+                d.status = "failed"
+                d.error_message = (
+                    f"File lost (not in local FS or remote storage). "
+                    f"Original: {d.error_message or 'unknown'}"
+                )
+                # Free up the parent match so it can be re-imported by
+                # the normal import step. The demo will be re-downloaded
+                # from HLTV from scratch.
+                if d.pro_match_id:
+                    match = db.query(ProMatch).filter(ProMatch.id == d.pro_match_id).first()
+                    if match:
+                        match.demo_id = None
+                        match.import_status = None
+                        match.import_error = None
+            db.commit()
+            logger.warning(
+                "auto-retry: %d demo(s) had no recoverable file — "
+                "marked as lost, cleared match.demo_id for fresh re-download",
+                len(lost_demos),
+            )
+        except Exception:
+            logger.exception("auto-retry lost-file handler failed")
+            db.rollback()
+        finally:
+            db.close()
+
+    # ---- Spawn the parser tasks for files we found -------------------
+    if actually_reparsable:
         from core.bg import spawn
         from services.storage import UPLOAD_DIR
         from workers.demo_worker import process_demo
 
-        for demo_id, storage_filename in requeued_demos:
-            # Use the local upload-dir path; the worker will fall back to
-            # S3 by basename if the file isn't present locally (the
-            # storage backend handles both cases transparently).
+        for demo_id, storage_filename in actually_reparsable:
             file_path = str(UPLOAD_DIR / storage_filename)
             spawn(process_demo(demo_id, file_path), name=f"retry-demo-{demo_id}")
 
-    return len(requeued_demos) + requeued_matches
+    return len(actually_reparsable) + requeued_matches
 
 
 # ---------------------------------------------------------------------------

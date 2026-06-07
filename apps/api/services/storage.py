@@ -69,6 +69,19 @@ class LocalDemoStorage:
             return True
         return False
 
+    def upload_bytes(self, key: str, data: bytes) -> str:
+        """Write raw bytes to the local upload dir under ``key``.
+
+        S3-protocol parity: returns the canonical absolute path so the
+        caller can use it as the file URI (no s3:// scheme on local).
+        """
+        path = UPLOAD_DIR / key
+        path.write_bytes(data)
+        return str(path)
+
+    def object_exists(self, key: str) -> bool:
+        return (UPLOAD_DIR / key).exists()
+
 
 # ---------------------------------------------------------------------------
 # Factory
