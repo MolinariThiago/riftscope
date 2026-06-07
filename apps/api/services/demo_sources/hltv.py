@@ -287,9 +287,13 @@ class HltvSource:
             # --- Map ---
             map_name = _extract_map(row)
 
-            # --- Stars → tier ---
+            # --- Stars → tier (with event-name floor) ---
+            # ``event_name`` is passed so Major / IEM / BLAST events get
+            # promoted regardless of HLTV's per-match star rating, which
+            # is editorial and usually low for group-stage games even
+            # at the biggest tournaments.
             star_count = _extract_stars(row)
-            tier = _stars_to_tier(star_count)
+            tier = _stars_to_tier(star_count, event_name)
             # Diagnostic — log the first few rows so we can verify the
             # star extraction is working on the current HLTV layout.
             # When the parser silently regresses to 0 stars on every
@@ -529,25 +533,85 @@ def _clean(s: str | None) -> str:
     )
 
 
-def _stars_to_tier(stars: int) -> str | None:
-    """Map HLTV's 0-5 importance stars into RIFTSCOPE's tier vocabulary.
+def _stars_to_tier(stars: int, event_name: str | None = None) -> str | None:
+    """Map HLTV's 0-5 importance stars into RIFTSCOPE's tier vocabulary,
+    with an event-name FLOOR so big-event group stages aren't filtered
+    out as B/C just because HLTV's editorial rating is per-MATCH.
 
-        5 -> S+   (IEM Major, BLAST Premier finals)
-        4 -> S    (Tier-1 regular, ESL Pro League finals)
-        3 -> A    (Tier-1 regional, big qualifiers)
-        2 -> B    (Online cups, smaller LANs)
-        0-1 -> C  (Scrims, FPL-C, low-stakes qualifiers)
+    HLTV uses its star rating per individual match, not per event. A
+    Major Stage 2 group game between mid-tier teams gets 1-2 stars even
+    though everyone playing in a Major is by definition tier-1 and
+    every game matters for the bracket. Our floors below ensure those
+    games land in the import pool regardless of the per-match stars.
+
+    Star → tier (default):
+        5 -> S+   (Grand finals, hyped matchups)
+        4 -> S    (Playoffs / deciders)
+        3 -> A    (Important games, qualifiers to LAN)
+        2 -> B    (Online cups, group stages, smaller LANs)
+        0-1 -> C  (Openers, scrims, FPL-C)
+
+    Event-name boost (floors — never demotes, only promotes):
+        IEM Cologne Major / PGL Major / Major  -> floor S+ (every Major game matters)
+        IEM Katowice / Cologne / BLAST World Final / ESL Pro League Season X playoffs -> floor S
+        BLAST Premier / Pinnacle / EPL group   -> floor A
     """
+    base_tier: str | None
     if stars >= 5:
-        return "S+"
-    if stars == 4:
-        return "S"
-    if stars == 3:
-        return "A"
-    if stars == 2:
-        return "B"
-    if stars in (0, 1):
-        return "C"
+        base_tier = "S+"
+    elif stars == 4:
+        base_tier = "S"
+    elif stars == 3:
+        base_tier = "A"
+    elif stars == 2:
+        base_tier = "B"
+    elif stars in (0, 1):
+        base_tier = "C"
+    else:
+        base_tier = None
+
+    floor = _event_tier_floor(event_name)
+    if floor is None:
+        return base_tier
+    # Promote (never demote) — return the HIGHER of base_tier and floor.
+    return _max_tier(base_tier, floor)
+
+
+# Tier order for the max() comparison. Lower number = higher priority.
+_TIER_RANK = {"S+": 0, "S": 1, "A": 2, "B": 3, "C": 4, None: 5}
+
+
+def _max_tier(a: str | None, b: str | None) -> str | None:
+    """Return whichever of a / b ranks higher (S+ wins, NULL loses)."""
+    return a if _TIER_RANK.get(a, 5) <= _TIER_RANK.get(b, 5) else b
+
+
+# Event-name → tier floor. Order matters: the FIRST match wins, so put
+# the most specific (Majors first) before the more generic LAN keywords.
+_EVENT_TIER_FLOORS: list[tuple[re.Pattern, str]] = [
+    # Majors — anything labelled "Major" is S+ regardless of stars.
+    (re.compile(r"\bmajor\b", re.IGNORECASE), "S+"),
+    # Crown LAN events — always S even if HLTV stars the opener as 2.
+    (re.compile(
+        r"\b(IEM\s+(Katowice|Cologne|Rio)|BLAST\s+World\s+Final|"
+        r"ESL\s+One\s+Cologne|PGL\s+(Stockholm|Antwerp|Copenhagen))\b",
+        re.IGNORECASE,
+    ), "S"),
+    # Mid-tier tier-1 events — group stages count as A.
+    (re.compile(
+        r"\b(IEM\s+Dallas|BLAST\s+Premier|ESL\s+Pro\s+League|"
+        r"PGL|Pinnacle\s+Cup|EPL\s+Season|Gamers8|CCT)\b",
+        re.IGNORECASE,
+    ), "A"),
+]
+
+
+def _event_tier_floor(event_name: str | None) -> str | None:
+    if not event_name:
+        return None
+    for pat, tier in _EVENT_TIER_FLOORS:
+        if pat.search(event_name):
+            return tier
     return None
 
 
