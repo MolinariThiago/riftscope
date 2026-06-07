@@ -251,22 +251,27 @@ async def _run_loop() -> None:
         if await _wait_or_shutdown(STARTUP_DELAY_SECONDS):
             return
 
-        # ONE-SHOT BACKFILL: mark legacy ProMatches that lack
-        # source_match_id as permanently failed so they stop hammering
-        # the import queue. These rows were inserted by Liquipedia or
-        # an older HLTV scraper that didn't set source_match_id; the
-        # current import path can't construct a download URL without
-        # it. Marking them once here avoids the per-tick churn we saw
-        # with 37 dead matches all returning "no source_match_id".
+        # ONE-SHOT BACKFILL: mark legacy ProMatches that the import
+        # pipeline can't process as permanently failed so they stop
+        # hammering the queue every tick.
+        #
+        # The import path in pro_import.py builds the HLTV match URL
+        # from ``source_match_id`` ONLY when it starts with ``hltv-``.
+        # Anything else (NULL, empty, ``liquipedia-XXX``, manual rows
+        # without an id, …) returns "no_demo_url" instantly. Catch
+        # them all and mark them failed once.
         try:
             db_init = SessionLocal()
-            from sqlalchemy import or_ as _or
+            from sqlalchemy import or_ as _or, and_ as _and, not_ as _not
+            from sqlalchemy import String as _String
+
             legacy_dead = (
                 db_init.query(ProMatch)
                 .filter(ProMatch.demo_id.is_(None))
                 .filter(_or(
                     ProMatch.source_match_id.is_(None),
                     ProMatch.source_match_id == "",
+                    _not(ProMatch.source_match_id.like("hltv-%")),
                 ))
                 .filter(_or(
                     ProMatch.import_status.is_(None),
@@ -274,16 +279,21 @@ async def _run_loop() -> None:
                 ))
                 .all()
             )
+            logger.info(
+                "scheduler startup: backfill found %d legacy match(es) "
+                "to permanently fail (source_match_id not 'hltv-*' or missing)",
+                len(legacy_dead),
+            )
             for m in legacy_dead:
                 m.import_status = "failed"
                 m.import_error = (
-                    "no source_match_id (legacy match — cannot resolve demo URL)"
+                    f"Legacy match — source_match_id={m.source_match_id!r} "
+                    "doesn't match HLTV pattern, cannot resolve demo URL"
                 )
             if legacy_dead:
                 db_init.commit()
                 logger.info(
-                    "scheduler startup: marked %d legacy match(es) without "
-                    "source_match_id as permanently failed",
+                    "scheduler startup: marked %d legacy match(es) as failed",
                     len(legacy_dead),
                 )
             db_init.close()
