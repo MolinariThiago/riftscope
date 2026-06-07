@@ -346,17 +346,26 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
           if (toIdx < 0) return;
           const toFrame = fr[toIdx];
           const fromIdx = fr.findIndex((f) => f.id === stateRef.current.currentFrameId);
-          // Going BACKWARDS through the step list? Then the destination
-          // frame's recorded path describes how we LEFT it (going forward).
-          // Reverse it so the entity retraces the same route in reverse.
-          const goingBackwards = fromIdx >= 0 && toIdx < fromIdx;
 
-          // For forward transitions we prefer the destination frame's path
-          // (movement INTO that frame). For backward transitions we use
-          // the CURRENT frame's path (since it describes how we got there)
-          // and play it in reverse.
-          const pathSource = goingBackwards ? fr[fromIdx] : toFrame;
-          const pathsForTransition = pathSource?.paths ?? {};
+          // Going BACKWARDS or jumping to the same frame? Snap instead of
+          // animating. Reverse-replaying recorded paths looks awkward
+          // (entities un-doing their movement), so skip the animation
+          // entirely and let setCurrentFrame trigger a normal redraw.
+          if (fromIdx >= 0 && toIdx <= fromIdx) {
+            // Cancel any in-flight animation first so it doesn't keep
+            // ticking after the snap.
+            if (animRef.current) {
+              try { app.ticker.remove(animRef.current); } catch { /* */ }
+              animRef.current = null;
+            }
+            usePlaybook.getState().setCurrentFrame(toFrameId);
+            return;
+          }
+
+          // Forward transition — use the destination frame's recorded path
+          // (movement INTO that frame). Falls back to a straight-line ease
+          // when no path was recorded.
+          const pathsForTransition = toFrame.paths ?? {};
 
           // Snapshot the CURRENT on-screen positions (could be mid-animation
           // or static from forceRedraw) so we lerp from where things ACTUALLY
@@ -388,10 +397,9 @@ export function TacticalBoard({ mapMeta, mapName, onReady }: Props) {
               const pb = toFrame.positions[e.id];
               const recorded = pathsForTransition[e.id];
               if (recorded && recorded.length >= 2) {
-                // Replay the recorded route. Forward → 0→1, backward → 1→0
-                // so the entity traces the same path in reverse direction.
-                const uu = goingBackwards ? 1 - u : u;
-                const p = sampleAlongPath(recorded, uu);
+                // Replay the recorded forward route. (Backward jumps are
+                // handled above via instant snap.)
+                const p = sampleAlongPath(recorded, u);
                 node.position.set(p.x * rs, p.y * rs);
               } else if (pa && pb) {
                 node.position.set(
